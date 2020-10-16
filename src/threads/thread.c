@@ -92,6 +92,7 @@ thread_init (void)
   lock_init (&tid_lock);
   list_init (&ready_list);
   list_init (&all_list);
+  list_init (&sleep_list);
 
   /* Set up a thread structure for the running thread. */
   initial_thread = running_thread ();
@@ -478,6 +479,8 @@ init_thread (struct thread *t, const char *name, int priority)
   t->stack = (uint8_t *) t + PGSIZE;
   t->priority = priority;
   t->magic = THREAD_MAGIC;
+  sema_init(&(t->sleep_semaphore), 0);
+  t->end_sleep_ticks = DEFAULT_END_SLEEP_TICK;
 
   old_level = intr_disable ();
   list_push_back (&all_list, &t->allelem);

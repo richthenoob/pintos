@@ -4,6 +4,7 @@
 #include <debug.h>
 #include <list.h>
 #include <stdint.h>
+#include "threads/synch.h"
 
 /* States in a thread's life cycle. */
 enum thread_status
@@ -23,6 +24,9 @@ typedef int tid_t;
 #define PRI_MIN 0                       /* Lowest priority. */
 #define PRI_DEFAULT 31                  /* Default priority. */
 #define PRI_MAX 63                      /* Highest priority. */
+
+/* Default value used in timer_sleep */
+#define DEFAULT_END_SLEEP_TICK INT64_MAX
 
 /* A kernel thread or user process.
 
@@ -89,6 +93,9 @@ struct thread
     uint8_t *stack;                     /* Saved stack pointer. */
     int priority;                       /* Priority. */
     struct list_elem allelem;           /* List element for all threads list. */
+   int64_t end_sleep_ticks;            /* Specific tick to wake thread up. */
+   struct semaphore sleep_semaphore;   /* Used to implement non-busy wait. */
+   struct list_elem sleep_elem;        /* List element for sleep_list */
 
     /* Shared between thread.c and synch.c. */
     struct list_elem elem;              /* List element. */
@@ -106,6 +113,9 @@ struct thread
    If true, use multi-level feedback queue scheduler.
    Controlled by kernel command-line option "mlfqs". */
 extern bool thread_mlfqs;
+
+/* List of processes that are currently sleeping. Accessed in timer.c */
+struct list sleep_list;
 
 void thread_init (void);
 void thread_start (void);
