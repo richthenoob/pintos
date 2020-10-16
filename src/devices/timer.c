@@ -84,16 +84,41 @@ timer_elapsed (int64_t then)
   return timer_ticks () - then;
 }
 
+/* Comparator function to sort list of threads by end_sleep_ticks*/
+static bool thread_ticks_comp (const struct list_elem *a,
+                               const struct list_elem *b,
+                               void *aux UNUSED) {
+  struct thread *thread_a = list_entry (a, struct thread, sleep_elem);
+  struct thread *thread_b = list_entry (b, struct thread, sleep_elem);
+  return thread_a->end_sleep_ticks < thread_b->end_sleep_ticks;
+}
+
+
 /* Sleeps for approximately TICKS timer ticks.  Interrupts must
    be turned on. */
 void
 timer_sleep (int64_t ticks) 
 {
-  int64_t start = timer_ticks ();
+  if (ticks <= 0) {
+    return;
+  }
 
+  struct thread *curr_thread = thread_current ();
+
+  ASSERT (curr_thread->end_sleep_ticks == DEFAULT_END_SLEEP_TICK);
   ASSERT (intr_get_level () == INTR_ON);
-  while (timer_elapsed (start) < ticks) 
-    thread_yield ();
+
+  /* Disable interrupts to ensure no concurrent access to sleep_list */
+  enum intr_level old_level = intr_disable ();
+  curr_thread->end_sleep_ticks = timer_ticks () + ticks;
+  list_insert_ordered (&sleep_list,
+                       &curr_thread->sleep_elem,
+                       thread_ticks_comp,
+                       NULL);
+  intr_set_level (old_level);
+
+  sema_down (&curr_thread->sleep_semaphore);
+  curr_thread->end_sleep_ticks = DEFAULT_END_SLEEP_TICK;
 }
 
 /* Sleeps for approximately MS milliseconds.  Interrupts must be
@@ -170,8 +195,22 @@ timer_print_stats (void)
 static void
 timer_interrupt (struct intr_frame *args UNUSED)
 {
+  struct list_elem *list_elem;
+  struct thread *thread_to_check;
   ticks++;
   thread_tick ();
+
+  while (!list_empty (&sleep_list)) {
+    list_elem = list_front (&sleep_list);
+    thread_to_check = list_entry (list_elem, struct thread, sleep_elem);
+
+    if (thread_to_check->end_sleep_ticks <= timer_ticks ()) {
+      list_remove (list_elem);
+      sema_up (&(thread_to_check->sleep_semaphore));
+    } else {
+      break;
+    }
+  }
 }
 
 /* Returns true if LOOPS iterations waits for more than one timer
