@@ -20,6 +20,9 @@
    of thread.h for details. */
 #define THREAD_MAGIC 0xcd6abf4b
 
+/* Used to check if thread is the idle thread */
+#define TID_IDLE 2
+
 /* List of processes in THREAD_READY state, that is, processes
    that are ready to run but not actually running. */
 static struct list ready_list;
@@ -36,6 +39,9 @@ static struct thread *initial_thread;
 
 /* Lock used by allocate_tid(). */
 static struct lock tid_lock;
+
+/* Lock used by ready_list */
+static struct semaphore ready_semaphore;
 
 /* Stack frame for kernel_thread(). */
 struct kernel_thread_frame 
@@ -90,6 +96,7 @@ thread_init (void)
   ASSERT (intr_get_level () == INTR_OFF);
 
   lock_init (&tid_lock);
+  sema_init (&ready_semaphore, 1);
   list_init (&ready_list);
   list_init (&all_list);
   list_init (&sleep_list);
@@ -122,7 +129,10 @@ thread_start (void)
 size_t
 threads_ready (void)
 {
-  return list_size (&ready_list);      
+  sema_down (&ready_semaphore);
+  size_t size = list_size (&ready_list);
+  sema_up (&ready_semaphore);
+  return size;
 }
 
 /* Called by the timer interrupt handler at each timer tick.
@@ -220,6 +230,15 @@ thread_create (const char *name, int priority,
   return tid;
 }
 
+/* Comparator function to sort list of threads by priority */
+static bool thread_priority_comp (const struct list_elem *a,
+                                  const struct list_elem *b,
+                                  void *aux UNUSED) {
+  struct thread *thread_a = list_entry (a, struct thread, elem);
+  struct thread *thread_b = list_entry (b, struct thread, elem);
+  return thread_a->priority < thread_b->priority;
+}
+
 /* Puts the current thread to sleep.  It will not be scheduled
    again until awoken by thread_unblock().
 
@@ -233,6 +252,7 @@ thread_block (void)
   ASSERT (intr_get_level () == INTR_OFF);
 
   thread_current ()->status = THREAD_BLOCKED;
+
   schedule ();
 }
 
@@ -253,9 +273,13 @@ thread_unblock (struct thread *t)
 
   old_level = intr_disable ();
   ASSERT (t->status == THREAD_BLOCKED);
-  list_push_back (&ready_list, &t->elem);
+  list_insert_ordered(&ready_list, &t->elem, thread_priority_comp, NULL);
   t->status = THREAD_READY;
   intr_set_level (old_level);
+
+  if (thread_current ()->tid != TID_IDLE) {
+    thread_yield();
+  }
 }
 
 /* Returns the name of the running thread. */
@@ -272,7 +296,7 @@ struct thread *
 thread_current (void) 
 {
   struct thread *t = running_thread ();
-  
+
   /* Make sure T is really a thread.
      If either of these assertions fire, then your thread may
      have overflowed its stack.  Each thread has less than 4 kB
@@ -323,8 +347,8 @@ thread_yield (void)
   ASSERT (!intr_context ());
 
   old_level = intr_disable ();
-  if (cur != idle_thread) 
-    list_push_back (&ready_list, &cur->elem);
+  if (cur != idle_thread)
+    list_insert_ordered (&ready_list, &cur->elem, thread_priority_comp, NULL);
   cur->status = THREAD_READY;
   schedule ();
   intr_set_level (old_level);
@@ -351,7 +375,19 @@ thread_foreach (thread_action_func *func, void *aux)
 void
 thread_set_priority (int new_priority) 
 {
+  sema_down(&ready_semaphore);
   thread_current ()->priority = new_priority;
+  if (!list_empty (&ready_list)) {
+    struct thread *last_elem = list_entry (list_back(&ready_list),
+                                           struct thread,
+                                           elem);
+    if (new_priority < last_elem->priority) {
+      sema_up(&ready_semaphore);
+      thread_yield();
+    } else {
+      sema_up(&ready_semaphore);
+    }
+  }
 }
 
 /* Returns the current thread's priority. */
@@ -506,12 +542,18 @@ alloc_frame (struct thread *t, size_t size)
    will be in the run queue.)  If the run queue is empty, return
    idle_thread. */
 static struct thread *
-next_thread_to_run (void) 
+next_thread_to_run (void)
 {
+  struct thread *thread_to_return;
+  sema_down (&ready_semaphore);
   if (list_empty (&ready_list))
-    return idle_thread;
+    thread_to_return = idle_thread;
   else
-    return list_entry (list_pop_front (&ready_list), struct thread, elem);
+    thread_to_return = list_entry (list_pop_back(&ready_list),
+                                   struct thread,
+                                   elem);
+  sema_up (&ready_semaphore);
+  return thread_to_return;
 }
 
 /* Completes a thread switch by activating the new thread's page
