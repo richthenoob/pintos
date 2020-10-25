@@ -115,9 +115,9 @@ timer_sleep (int64_t ticks)
                        &curr_thread->sleep_elem,
                        thread_ticks_comp,
                        NULL);
+  thread_block ();
   intr_set_level (old_level);
 
-  sema_down (&curr_thread->sleep_semaphore);
   curr_thread->end_sleep_ticks = DEFAULT_END_SLEEP_TICK;
 }
 
@@ -206,7 +206,7 @@ timer_interrupt (struct intr_frame *args UNUSED)
 
     if (thread_to_check->end_sleep_ticks <= timer_ticks ()) {
       list_remove (list_elem);
-      sema_up (&(thread_to_check->sleep_semaphore));
+      thread_unblock (thread_to_check);
     } else {
       break;
     }

@@ -129,9 +129,9 @@ thread_start (void)
 size_t
 threads_ready (void)
 {
-  sema_down (&ready_semaphore);
+  enum intr_level old_level = intr_disable();
   size_t size = list_size (&ready_list);
-  sema_up (&ready_semaphore);
+  intr_set_level(old_level);
   return size;
 }
 
@@ -227,16 +227,20 @@ thread_create (const char *name, int priority,
   /* Add to run queue. */
   thread_unblock (t);
 
+  if (thread_current ()->tid != TID_IDLE) {
+    thread_yield();
+  }
+
   return tid;
 }
 
 /* Comparator function to sort list of threads by priority */
-static bool thread_priority_comp (const struct list_elem *a,
+bool thread_priority_comp (const struct list_elem *a,
                                   const struct list_elem *b,
                                   void *aux UNUSED) {
   struct thread *thread_a = list_entry (a, struct thread, elem);
   struct thread *thread_b = list_entry (b, struct thread, elem);
-  return thread_a->priority < thread_b->priority;
+  return get_specific_priority(thread_a) < get_specific_priority(thread_b);
 }
 
 /* Puts the current thread to sleep.  It will not be scheduled
@@ -273,7 +277,7 @@ thread_unblock (struct thread *t)
 
   old_level = intr_disable ();
   ASSERT (t->status == THREAD_BLOCKED);
-  list_insert_ordered(&ready_list, &t->elem, thread_priority_comp, NULL);
+  list_push_back(&ready_list, &t->elem);
   t->status = THREAD_READY;
   intr_set_level (old_level);
 
@@ -330,10 +334,30 @@ thread_exit (void)
      and schedule another process.  That process will destroy us
      when it calls thread_schedule_tail(). */
   intr_disable ();
-  list_remove (&thread_current()->allelem);
-  thread_current ()->status = THREAD_DYING;
+  struct thread *curr = thread_current ();
+  list_remove (&curr->allelem);
+  if (curr->child != NULL) {
+    curr->child->parent_prev_child = NULL;
+    curr->child->parent = NULL;
+  }
+  curr->status = THREAD_DYING;
   schedule ();
   NOT_REACHED ();
+}
+
+/* Yields the CPU if and only if next thread on the list is of strictly
+   higher priority */
+void
+thread_maybe_yield(void) {
+  // TODO: worry about concurrency, maybe with a ready_semaphore
+  if (!list_empty (&ready_list)) {
+    struct thread *last_elem = list_entry (list_max(&ready_list, thread_priority_comp, NULL),
+                                           struct thread,
+                                           elem);
+    if (thread_get_priority() < get_specific_priority(last_elem)) {
+      thread_yield();
+    }
+  }
 }
 
 /* Yields the CPU.  The current thread is not put to sleep and
@@ -347,8 +371,9 @@ thread_yield (void)
   ASSERT (!intr_context ());
 
   old_level = intr_disable ();
-  if (cur != idle_thread)
-    list_insert_ordered (&ready_list, &cur->elem, thread_priority_comp, NULL);
+  if (cur != idle_thread) {
+    list_push_back(&ready_list, &cur->elem);
+  }
   cur->status = THREAD_READY;
   schedule ();
   intr_set_level (old_level);
@@ -375,26 +400,47 @@ thread_foreach (thread_action_func *func, void *aux)
 void
 thread_set_priority (int new_priority) 
 {
-  sema_down(&ready_semaphore);
-  thread_current ()->priority = new_priority;
-  if (!list_empty (&ready_list)) {
-    struct thread *last_elem = list_entry (list_back(&ready_list),
-                                           struct thread,
-                                           elem);
-    if (new_priority < last_elem->priority) {
-      sema_up(&ready_semaphore);
-      thread_yield();
-    } else {
-      sema_up(&ready_semaphore);
-    }
+  struct thread *curr_thread = thread_current ();
+  struct thread *highest_waiting_pri_thread = curr_thread->highest_waiting_priority;
+  curr_thread->priority = new_priority;
+  if (highest_waiting_pri_thread != NULL &&
+      get_specific_priority (highest_waiting_pri_thread) > new_priority) {
+
+    highest_waiting_pri_thread->child_prev_parent = curr_thread->parent;
+    curr_thread->parent_prev_child = highest_waiting_pri_thread->child;
+    highest_waiting_pri_thread->child = curr_thread;
+    curr_thread->parent = highest_waiting_pri_thread;
+  } else {
+    thread_maybe_yield();
   }
+}
+
+int
+get_specific_priority (struct thread *thread_to_check)
+{
+  // TODO: tidy up
+  int parent_priority, base_priority;
+  struct thread *parent = thread_to_check->parent;
+
+  if (parent != NULL && parent->status != THREAD_DYING) {
+    while (parent->parent != NULL) {
+      parent = parent->parent;
+    }
+    parent_priority = parent->priority;
+  } else {
+    parent_priority = PRI_MIN - 1;
+  }
+
+  base_priority = thread_to_check->priority;
+
+  return base_priority > parent_priority ? base_priority : parent_priority;
 }
 
 /* Returns the current thread's priority. */
 int
 thread_get_priority (void) 
 {
-  return thread_current ()->priority;
+  return get_specific_priority(thread_current());
 }
 
 /* Sets the current thread's nice value to NICE. */
@@ -515,7 +561,6 @@ init_thread (struct thread *t, const char *name, int priority)
   t->stack = (uint8_t *) t + PGSIZE;
   t->priority = priority;
   t->magic = THREAD_MAGIC;
-  sema_init(&(t->sleep_semaphore), 0);
   t->end_sleep_ticks = DEFAULT_END_SLEEP_TICK;
 
   old_level = intr_disable ();
@@ -544,16 +589,30 @@ alloc_frame (struct thread *t, size_t size)
 static struct thread *
 next_thread_to_run (void)
 {
-  struct thread *thread_to_return;
-  sema_down (&ready_semaphore);
-  if (list_empty (&ready_list))
-    thread_to_return = idle_thread;
-  else
-    thread_to_return = list_entry (list_pop_back(&ready_list),
-                                   struct thread,
-                                   elem);
-  sema_up (&ready_semaphore);
-  return thread_to_return;
+  if (list_empty (&ready_list)) {
+    return idle_thread;
+  } else {
+    /* Check if the potential next thread to run has parents (i.e. threads that
+       have donated priority to it), then chose its parents if they exist
+       and is ready to run. */
+    struct list_elem *elem_to_remove = list_max (&ready_list,
+                                                 thread_priority_comp,
+                                                 NULL);
+    struct thread *thread_to_remove = list_entry (elem_to_remove,
+                                          struct thread,
+                                                  elem);
+    struct thread *parent = thread_to_remove->parent;
+
+    if (parent != NULL && parent->status == THREAD_READY) {
+      thread_to_remove = thread_to_remove->parent;
+      elem_to_remove = &thread_to_remove->elem;
+      thread_to_remove->child->parent = NULL;
+      thread_to_remove->child = NULL;
+    }
+
+    list_remove (elem_to_remove);
+    return thread_to_remove;
+  }
 }
 
 /* Completes a thread switch by activating the new thread's page
