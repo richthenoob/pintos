@@ -281,9 +281,6 @@ thread_unblock (struct thread *t)
   t->status = THREAD_READY;
   intr_set_level (old_level);
 
-  if (thread_current ()->tid != TID_IDLE) {
-    thread_yield();
-  }
 }
 
 /* Returns the name of the running thread. */
