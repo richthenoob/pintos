@@ -230,8 +230,7 @@ lock_acquire (struct lock *lock)
                 NULL),struct thread,elem);
       caller_thread->highest_waiting_priority = highest_waiting_pri_thread;
     } else {
-      ASSERT (get_specific_priority (caller_thread) ==
-      get_specific_priority (holder_thread))
+      sema_down (&lock->semaphore);
     }
   }
 }

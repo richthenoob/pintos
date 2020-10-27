@@ -23,3 +23,9 @@
 *.nav
 *.toc
 
+#ignore mac files
+.DS_Store
+
+#ignore clion-files
+.idea
+cmake-build-debug
