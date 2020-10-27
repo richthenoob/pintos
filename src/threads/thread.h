@@ -5,15 +5,17 @@
 #include <list.h>
 #include <stdint.h>
 #include "threads/synch.h"
+#include "devices/timer.h"
+#include "fixed_point_arithmetic.h"
 
 /* States in a thread's life cycle. */
 enum thread_status
-  {
-    THREAD_RUNNING,     /* Running thread. */
-    THREAD_READY,       /* Not running but ready to run. */
-    THREAD_BLOCKED,     /* Waiting for an event to trigger. */
-    THREAD_DYING        /* About to be destroyed. */
-  };
+{
+  THREAD_RUNNING,     /* Running thread. */
+  THREAD_READY,       /* Not running but ready to run. */
+  THREAD_BLOCKED,     /* Waiting for an event to trigger. */
+  THREAD_DYING        /* About to be destroyed. */
+};
 
 /* Thread identifier type.
    You can redefine this to whatever type you like. */
@@ -24,6 +26,10 @@ typedef int tid_t;
 #define PRI_MIN 0                       /* Lowest priority. */
 #define PRI_DEFAULT 31                  /* Default priority. */
 #define PRI_MAX 63                      /* Highest priority. */
+
+/* Thread niceness. */
+#define NICE_MAX 20                     /* Highest niceness. */
+#define NICE_MIN -20                    /* Lowest niceness. */
 
 /* Default value used in timer_sleep */
 #define DEFAULT_END_SLEEP_TICK INT64_MAX
@@ -101,17 +107,19 @@ struct thread
     struct thread *parent_prev_child;
     struct thread *highest_waiting_priority;
 
-    /* Shared between thread.c and synch.c. */
-    struct list_elem elem;              /* List element. */
+  /* Shared between thread.c and synch.c. */
+  struct list_elem elem;                /* List element. */
+  int niceness;                         /* Thread niceness*/
+  fixed_point_t recent_cpu;             /* Estimation of the CPU time the thread has used recently.*/
 
 #ifdef USERPROG
-    /* Owned by userprog/process.c. */
+  /* Owned by userprog/process.c. */
     uint32_t *pagedir;                  /* Page directory. */
 #endif
 
-    /* Owned by thread.c. */
-    unsigned magic;                     /* Detects stack overflow. */
-  };
+  /* Owned by thread.c. */
+  unsigned magic;                       /* Detects stack overflow. */
+};
 
 /* If false (default), use round-robin scheduler.
    If true, use multi-level feedback queue scheduler.
