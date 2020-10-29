@@ -239,7 +239,12 @@ lock_acquire (struct lock *lock)
       }
     else
       {
+        /* If somehow the caller_thread has a lower priority than the
+           holder_thread, force caller_thread to sleep until the holder_thread
+           releases the lock. */
         sema_down (&lock->semaphore);
+        /* After thread regains control of the lock */
+        lock->holder = caller_thread;
       }
 }
 
