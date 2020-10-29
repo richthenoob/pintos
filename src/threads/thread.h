@@ -9,8 +9,7 @@
 #include "fixed_point_arithmetic.h"
 
 /* States in a thread's life cycle. */
-enum thread_status
-{
+enum thread_status {
   THREAD_RUNNING,     /* Running thread. */
   THREAD_READY,       /* Not running but ready to run. */
   THREAD_BLOCKED,     /* Waiting for an event to trigger. */
@@ -90,27 +89,27 @@ typedef int tid_t;
    only because they are mutually exclusive: only a thread in the
    ready state is on the run queue, whereas only a thread in the
    blocked state is on a semaphore wait list. */
-struct thread
-  {
-    /* Owned by thread.c. */
-    tid_t tid;                          /* Thread identifier. */
-    enum thread_status status;          /* Thread state. */
-    char name[16];                      /* Name (for debugging purposes). */
-    uint8_t *stack;                     /* Saved stack pointer. */
-    int priority;                       /* Priority. */
-    struct list_elem allelem;           /* List element for all threads list. */
-    int64_t end_sleep_ticks;            /* Specific tick to wake thread up. */
-    struct list_elem sleep_elem;        /* List element for sleep_list */
-    struct thread *parent;              /* Doner thread. */
-    struct thread *child;               /* Recipient thread. */
-    struct thread *child_prev_parent;   /* Previous doner thread. */
-    struct thread *parent_prev_child;
-    struct thread *highest_waiting_priority;
-
+struct thread {
+  /* Owned by thread.c. */
+  tid_t tid;                               /* Thread identifier. */
+  enum thread_status status;               /* Thread state. */
+  char name[16];                           /* Name (for debugging purposes). */
+  uint8_t *stack;                          /* Saved stack pointer. */
+  int priority;                            /* Priority. */
+  struct list_elem allelem;                /* List element for all threads list. */
+  int64_t end_sleep_ticks;                 /* Specific tick to wake thread up. */
+  struct list_elem sleep_elem;             /* List element for sleep_list */
+  struct thread *parent;                   /* Doner thread. */
+  struct thread *child;                    /* Recipient thread. */
+  struct thread *prev_parent_of_child;     /* Previous doner thread. */
+  struct thread *prev_child_of_parent;     /* Doner's thread previous child */
+  struct thread *highest_waiting_priority; /* Thread with highest priority waiting
+                                              for the semaphore owned by this thread */
+  int niceness;                         /* Thread niceness*/
+  fixed_point_t recent_cpu;             /* Estimation of the CPU time
+                                           the thread has used recently.*/
   /* Shared between thread.c and synch.c. */
   struct list_elem elem;                /* List element. */
-  int niceness;                         /* Thread niceness*/
-  fixed_point_t recent_cpu;             /* Estimation of the CPU time the thread has used recently.*/
 
 #ifdef USERPROG
   /* Owned by userprog/process.c. */
@@ -131,7 +130,7 @@ struct list sleep_list;
 
 void thread_init (void);
 void thread_start (void);
-size_t threads_ready(void);
+size_t threads_ready (void);
 
 void thread_tick (void);
 void thread_print_stats (void);
@@ -148,23 +147,25 @@ const char *thread_name (void);
 
 void thread_exit (void) NO_RETURN;
 void thread_yield (void);
-void thread_maybe_yield(void);
+void thread_maybe_yield (void);
 
 /* Performs some operation on thread t, given auxiliary data AUX. */
 typedef void thread_action_func (struct thread *t, void *aux);
 void thread_foreach (thread_action_func *, void *);
 
+/* Priority scheduling and donation functions */
 int thread_get_priority (void);
 void thread_set_priority (int);
 int get_specific_priority (struct thread *thread_to_check);
+void set_up_donation_hierarchy (struct thread *parent_thread,
+                                struct thread *child_thread);
+void undo_donation_hierarchy (struct thread *parent_thread,
+                              struct thread *child_thread);
 bool thread_priority_comp (const struct list_elem *a,
                            const struct list_elem *b,
                            void *aux UNUSED);
 
-bool thread_priority_comp_donor (const struct list_elem *a,
-                                 const struct list_elem *b,
-                                 void *aux UNUSED);
-
+/* BSD scheduler functions */
 int thread_get_nice (void);
 void thread_set_nice (int);
 int thread_get_recent_cpu (void);
