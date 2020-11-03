@@ -91,8 +91,7 @@ test_sleep (int thread_cnt, int iterations)
   
   /* now check that all of the threads are indeed asleep */
   
-  /* Acquire the output lock in case some rogue thread is still
-     running. */
+  /* Acquire the output lock so we cannot race with the sleeping threads */
   lock_acquire (&test.output_lock);
 
   /* Inspect and print the number of threads on the ready list . */
@@ -104,6 +103,13 @@ test_sleep (int thread_cnt, int iterations)
 
   pass ();  
   lock_release (&test.output_lock);
+  
+  /* Wait long enough for all the threads to finish. */
+  timer_sleep (100 + thread_cnt * iterations * 20 + 100);
+  
+  /* Clean up after ourselves */
+  free (output);
+  free (threads);
 }
 
 /* Sleeper thread. */
