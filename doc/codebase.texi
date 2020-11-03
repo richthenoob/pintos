@@ -497,9 +497,9 @@ files modified by the reference solution, and some may modify files not
 modified by the reference solution.
 
 @verbatim
- devices/timer.c       |   42 +++++-
- threads/thread.h      |   4  +
- 2 files changed, 43 insertions(+), 3 deletions(-)
+ devices/timer.c | 40 ++++++++++++++++++++++++++++++++++++++--
+ devices/timer.h |  9 +++++++++
+ 2 files changed, 47 insertions(+), 2 deletions(-)
 @end verbatim
 
 
