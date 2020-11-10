@@ -38,13 +38,6 @@ process_execute (const char *file_name)
     return TID_ERROR;
   strlcpy (fn_copy, file_name, PGSIZE);
 
-  //  Trying to tokenize the file_name
-  char *token, *save_ptr;
-  for (token = strtok_r(fn_copy, " ", &save_ptr); token != NULL;
-       token = strtok_r(NULL, " ", &save_ptr)) {
-    //Push the tokens into the stack
-  }
-
   /* Create a new thread to execute FILE_NAME. */
   tid = thread_create (file_name, PRI_DEFAULT, start_process, fn_copy);
   if (tid == TID_ERROR) {
@@ -59,9 +52,22 @@ process_execute (const char *file_name)
 static void
 start_process (void *file_name_)
 {
+  char *argv[50]; // TODO: replace with max number of args.
+  void *argv_addr[50];
   char *file_name = file_name_;
   struct intr_frame if_;
   bool success;
+
+  /*  Tokenize file_name and place into array argv */
+  char *token, *save_ptr;
+  int argc = 0;
+  for (token = strtok_r(file_name, " ", &save_ptr);
+       token != NULL;
+       token = strtok_r(NULL, " ", &save_ptr))
+    {
+      argv[argc] = token;
+      argc++;
+    }
 
   /* Initialize interrupt frame and load executable. */
   memset (&if_, 0, sizeof if_);
@@ -69,6 +75,46 @@ start_process (void *file_name_)
   if_.cs = SEL_UCSEG;
   if_.eflags = FLAG_IF | FLAG_MBS;
   success = load (file_name, &if_.eip, &if_.esp);
+
+  /* Set up stack. */
+  void *esp = PHYS_BASE - 32;
+
+  /* Push arguments in reverse order, storing each address into argv_addr. */
+  for (int i = argc - 1; i >= 0; --i)
+    {
+      esp -= strlen(argv[i]) + 1;
+      strlcpy(esp, argv[i], PGSIZE);
+      argv_addr[i] = &esp;
+    }
+
+  hex_dump(0, esp, PHYS_BASE - esp, true);
+
+  /* Push null pointer sentinel. */
+  esp -= 1;
+  memset(esp, 0, 1);
+
+  /* Push pointers to arguments. TODO: fix issue of pushing pointers*/
+  for (int j = 0; j < argc; ++j)
+    {
+      esp -= sizeof(void *);
+      memcpy(esp, argv_addr[j], sizeof(void *));
+      printf("%p\n", esp);
+    }
+
+  /* Set up argv */
+  void *old_esp = &esp;
+  esp -= sizeof(void *);
+  memcpy(esp, old_esp, sizeof(void *));
+
+  /* Set up argc */
+  esp -= sizeof(int);
+  memcpy(esp, &argc, sizeof(int));
+
+  /* Fake return address */
+  esp -= sizeof(void *);
+  memset(esp, 0, sizeof(void *));
+
+  hex_dump(0, esp, PHYS_BASE - esp, true);
 
   /* If load failed, quit. */
   palloc_free_page (file_name);
@@ -446,7 +492,7 @@ setup_stack (void **esp)
     {
       success = install_page (((uint8_t *) PHYS_BASE) - PGSIZE, kpage, true);
       if (success)
-        *esp = PHYS_BASE - 12;
+        *esp = PHYS_BASE - 32;
       else
         palloc_free_page (kpage);
     }

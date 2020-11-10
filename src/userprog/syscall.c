@@ -41,6 +41,7 @@ static void syscall_exit(struct intr_frame *f) {
   printf("exit syscall called!\n");
   // need to change to access from argument of exit
   print_process_termination_msg(0);
+  thread_exit();
 }
 
 static void print_process_termination_msg (int exit_code) {
