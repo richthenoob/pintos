@@ -36,7 +36,7 @@ process_execute (const char *file_name)
   fn_copy = palloc_get_page (0);
   if (fn_copy == NULL)
     return TID_ERROR;
-  strlcpy (fn_copy, file_name, PGSIZE);
+  memcpy (fn_copy, file_name, PGSIZE);
 
   /* Create a new thread to execute FILE_NAME. */
   tid = thread_create (file_name, PRI_DEFAULT, start_process, fn_copy);
@@ -77,44 +77,38 @@ start_process (void *file_name_)
   success = load (file_name, &if_.eip, &if_.esp);
 
   /* Set up stack. */
-  void *esp = PHYS_BASE - 32;
 
   /* Push arguments in reverse order, storing each address into argv_addr. */
   for (int i = argc - 1; i >= 0; --i)
     {
-      esp -= strlen(argv[i]) + 1;
-      strlcpy(esp, argv[i], PGSIZE);
-      argv_addr[i] = &esp;
+      if_.esp -= strlen(argv[i]) + 1;
+      strlcpy(if_.esp, argv[i], PGSIZE);
+      argv_addr[i] = if_.esp;
     }
 
-  hex_dump(0, esp, PHYS_BASE - esp, true);
-
   /* Push null pointer sentinel. */
-  esp -= 1;
-  memset(esp, 0, 1);
+  if_.esp -= sizeof(void *);
+  memset(if_.esp, 0, sizeof(void *));
 
-  /* Push pointers to arguments. TODO: fix issue of pushing pointers*/
-  for (int j = 0; j < argc; ++j)
+  /* Push pointers to arguments. */
+  for (int j = argc - 1; j >= 0; --j)
     {
-      esp -= sizeof(void *);
-      memcpy(esp, argv_addr[j], sizeof(void *));
-      printf("%p\n", esp);
+      if_.esp -= sizeof(void *);
+      memcpy(if_.esp, &argv_addr[j], sizeof(void *));
     }
 
   /* Set up argv */
-  void *old_esp = &esp;
-  esp -= sizeof(void *);
-  memcpy(esp, old_esp, sizeof(void *));
+  void *old_esp = if_.esp;
+  if_.esp -= sizeof(void *);
+  memcpy(if_.esp, &old_esp, sizeof(void *));
 
   /* Set up argc */
-  esp -= sizeof(int);
-  memcpy(esp, &argc, sizeof(int));
+  if_.esp -= sizeof(int);
+  memcpy(if_.esp, &argc, sizeof(int));
 
   /* Fake return address */
-  esp -= sizeof(void *);
-  memset(esp, 0, sizeof(void *));
-
-  hex_dump(0, esp, PHYS_BASE - esp, true);
+  if_.esp -= sizeof(void *);
+  memset(if_.esp, 0, sizeof(void *));
 
   /* If load failed, quit. */
   palloc_free_page (file_name);

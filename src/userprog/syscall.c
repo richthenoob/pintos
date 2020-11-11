@@ -9,7 +9,6 @@
 static void syscall_handler (struct intr_frame *);
 static void syscall_write (struct intr_frame *);
 static void syscall_exit (struct intr_frame *);
-static void print_process_termination_msg (int exit_code);
 static void check_user_memory_access (struct intr_frame *f, void *user_ptr);
 
 void
@@ -22,7 +21,6 @@ static void
 syscall_handler (struct intr_frame *f)
 {
   // TODO: check user memory access
-//  hex_dump(0, f->esp, 32, true);
   switch (*(int *) f->esp) {
     case SYS_WRITE:
       syscall_write(f);
@@ -34,18 +32,16 @@ syscall_handler (struct intr_frame *f)
 }
 
 static void syscall_write(struct intr_frame *f) {
-  printf("write syscall called!\n");
+  unsigned size = *((int *)(f->esp + 12));
+  void *user_ptr = pagedir_get_page(thread_current()->pagedir,
+                                    *(char **)(f->esp + 8));
+  putbuf(user_ptr, size);
 }
 
 static void syscall_exit(struct intr_frame *f) {
-  printf("exit syscall called!\n");
-  // need to change to access from argument of exit
-  print_process_termination_msg(0);
+  int exit_code = *((int *)(f->esp + 4));
+  printf("%s, exit(%d)", thread_name(), exit_code);
   thread_exit();
-}
-
-static void print_process_termination_msg (int exit_code) {
- // TODO: somehow find process name as passed in to process_execute
 }
 
 static void
