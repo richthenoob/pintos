@@ -17,9 +17,18 @@
 #include "threads/palloc.h"
 #include "threads/thread.h"
 #include "threads/vaddr.h"
+#include "threads/malloc.h"
 
 static thread_func start_process NO_RETURN;
 static bool load (const char *cmdline, void (**eip) (void), void **esp);
+
+struct process *process_lookup (const int pid) {
+  struct process p;
+  struct hash_elem *e;
+  p.pid = pid;
+  e = hash_find (&process_hashtable, &p.hash_elem);
+  return e != NULL ? hash_entry (e, struct process, hash_elem) : NULL;
+}
 
 /* Starts a new thread running a user program loaded from
    FILENAME.  The new thread may be scheduled (and may even exit)
@@ -36,12 +45,22 @@ process_execute (const char *file_name)
   fn_copy = palloc_get_page (0);
   if (fn_copy == NULL)
     return TID_ERROR;
-  memcpy (fn_copy, file_name, PGSIZE);
+
+  struct process *p = malloc (sizeof(struct process));
+  sema_init(&p->process_sema, 0);
+  p->pid = -1;
+  p->exit_code = -10;
+  hash_insert (&process_hashtable, &p->hash_elem);
+
+  memcpy (fn_copy, &p, sizeof(struct process **));
+  memcpy (fn_copy + sizeof(struct process **), file_name, PGSIZE - sizeof(struct process **));
 
   /* Create a new thread to execute FILE_NAME. */
   tid = thread_create (file_name, PRI_DEFAULT, start_process, fn_copy);
+  sema_down (&p->process_sema);
   if (tid == TID_ERROR) {
     palloc_free_page (fn_copy);
+    return -1;
   }
   return tid;
 
@@ -54,7 +73,8 @@ start_process (void *file_name_)
 {
   char *argv[50]; // TODO: replace with max number of args.
   void *argv_addr[50];
-  char *file_name = file_name_;
+  char *file_name = file_name_ + sizeof(struct process **);
+  struct process *p = *(struct process **) file_name_;
   struct intr_frame if_;
   bool success;
 
@@ -75,7 +95,6 @@ start_process (void *file_name_)
   if_.cs = SEL_UCSEG;
   if_.eflags = FLAG_IF | FLAG_MBS;
   success = load (file_name, &if_.eip, &if_.esp);
-
   /* Set up stack. */
 
   /* Push arguments in reverse order, storing each address into argv_addr. */
@@ -110,8 +129,13 @@ start_process (void *file_name_)
   if_.esp -= sizeof(void *);
   memset(if_.esp, 0, sizeof(void *));
 
+  hash_delete(&process_hashtable, &p->hash_elem);
+  p->pid = thread_current() -> tid;
+  hash_insert(&process_hashtable, &p->hash_elem);
+  sema_up(&p->process_sema);
+
   /* If load failed, quit. */
-  palloc_free_page (file_name);
+  palloc_free_page (file_name_);
   if (!success) 
     thread_exit ();
 
@@ -135,9 +159,31 @@ start_process (void *file_name_)
  * This function will be implemented in task 2.
  * For now, it does nothing. */
 int
-process_wait (tid_t child_tid UNUSED) 
+process_wait (tid_t child_tid)
 {
-  while (true);
+  struct process *p = process_lookup (child_tid);
+  if (p == NULL) {
+    printf("%s waiting for pid: %d but could not find!\n", thread_name(), child_tid);
+    return 0;
+  }
+  if (p->exit_code == -10) {
+    sema_down(&p->process_sema);
+  }
+  return p->exit_code;
+}
+
+void
+process_exit_with_code(int exit_code) {
+  struct process *p = process_lookup (thread_current ()->tid);
+  p->exit_code = exit_code;
+  sema_up (&p->process_sema);
+
+  char *name = thread_name ();
+  char *token, *save_ptr;
+  token = strtok_r (name, " ", &save_ptr);
+  printf ("%s: exit(%d)\n", token, exit_code);
+
+  thread_exit ();
 }
 
 /* Free the current process's resources. */
@@ -486,7 +532,7 @@ setup_stack (void **esp)
     {
       success = install_page (((uint8_t *) PHYS_BASE) - PGSIZE, kpage, true);
       if (success)
-        *esp = PHYS_BASE - 32;
+        *esp = PHYS_BASE;
       else
         palloc_free_page (kpage);
     }

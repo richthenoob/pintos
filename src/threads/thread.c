@@ -13,6 +13,7 @@
 #include "threads/vaddr.h"
 #ifdef USERPROG
 #include "userprog/process.h"
+#include "threads/malloc.h"
 #endif
 
 /* Random value for struct thread's `magic' member.
@@ -71,6 +72,18 @@ static void schedule (void);
 void thread_schedule_tail (struct thread *prev);
 static tid_t allocate_tid (void);
 
+unsigned process_hash (const struct hash_elem *p_, void *aux UNUSED) {
+  struct process *p = hash_entry (p_, struct process, hash_elem);
+  return hash_int(p->pid);
+}
+
+bool process_less(const struct hash_elem *a_, const struct hash_elem *b_,
+                  void *aux UNUSED) {
+  struct process *a = hash_entry (a_, struct process, hash_elem);
+  struct process *b = hash_entry (b_, struct process, hash_elem);
+  return a->pid < b->pid;
+}
+
 /* Initializes the threading system by transforming the code
    that's currently running into a thread.  This can't work in
    general and it is possible in this case only because loader.S
@@ -115,6 +128,8 @@ thread_start (void)
 
   /* Wait for the idle thread to initialize idle_thread. */
   sema_down (&idle_started);
+
+  hash_init (&process_hashtable, process_hash, process_less, NULL);
 }
 
 /* Returns the number of threads currently in the ready list */
