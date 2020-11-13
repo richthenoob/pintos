@@ -93,9 +93,11 @@ struct thread
     int priority;                       /* Priority. */
     struct list_elem allelem;           /* List element for all threads list. */
 
+
     /* Shared between thread.c and synch.c. */
     struct list_elem elem;              /* List element. */
 
+    struct hash hash_table_of_file_nodes;  /* Hash table for file nodes. */
 #ifdef USERPROG
     /* Owned by userprog/process.c. */
     uint32_t *pagedir;                  /* Page directory. */
@@ -103,7 +105,8 @@ struct thread
 
     /* Owned by thread.c. */
     unsigned magic;                     /* Detects stack overflow. */
-  };
+    struct file *file;                  /* To keep track of whether denying writes to this file.*/
+};
 
 struct hash process_hashtable;
 
@@ -143,5 +146,7 @@ int thread_get_nice (void);
 void thread_set_nice (int);
 int thread_get_recent_cpu (void);
 int thread_get_load_avg (void);
+
+int available_fd_value(struct thread *t);
 
 #endif /* threads/thread.h */

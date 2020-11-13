@@ -1,8 +1,0 @@
-#!/bin/bash
-
-cd /root/labcat
-git checkout 2ndYear_wip
-
-cd /root/exercise
-ruby /root/labcat/LabCAT labcat_CI_config.rb > /root/results/log 2>&1 
-
