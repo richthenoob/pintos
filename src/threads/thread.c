@@ -4,6 +4,7 @@
 #include <random.h>
 #include <stdio.h>
 #include <string.h>
+#include <userprog/syscall.h>
 #include "threads/flags.h"
 #include "threads/interrupt.h"
 #include "threads/intr-stubs.h"
@@ -228,6 +229,7 @@ thread_create (const char *name, int priority,
 
   intr_set_level (old_level);
 
+  hash_init(&(t->hash_table_of_file_nodes), file_node_hash, file_node_less, NULL);
   /* Add to run queue. */
   thread_unblock (t);
 
@@ -493,7 +495,6 @@ init_thread (struct thread *t, const char *name, int priority)
   t->stack = (uint8_t *) t + PGSIZE;
   t->priority = priority;
   t->magic = THREAD_MAGIC;
-
   old_level = intr_disable ();
   list_push_back (&all_list, &t->allelem);
   intr_set_level (old_level);
