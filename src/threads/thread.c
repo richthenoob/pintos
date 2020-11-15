@@ -131,6 +131,7 @@ thread_start (void)
   sema_down (&idle_started);
 
   hash_init (&process_hashtable, process_hash, process_less, NULL);
+  lock_init (&process_lock);
 }
 
 /* Returns the number of threads currently in the ready list */
@@ -495,6 +496,7 @@ init_thread (struct thread *t, const char *name, int priority)
   t->stack = (uint8_t *) t + PGSIZE;
   t->priority = priority;
   t->magic = THREAD_MAGIC;
+  list_init(&t->child_processes_list);
   old_level = intr_disable ();
   list_push_back (&all_list, &t->allelem);
   intr_set_level (old_level);
