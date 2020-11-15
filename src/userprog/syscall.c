@@ -42,7 +42,7 @@ static void syscall_close (int fd);
 static bool user_memory_access_is_valid (void *user_ptr);
 static int next_fd_value (void);
 static struct file_node *file_node_lookup (int fd, struct thread *t);
-static void free_file_node(struct file_node *file_node);
+static void free_file_node (struct file_node *file_node);
 
 void
 syscall_init (void)
@@ -101,30 +101,33 @@ static int single_arg_syscall (int syscall_no, void *arg1)
       case SYS_WAIT:
         return syscall_wait (*(pid_t *) arg1);
       case SYS_REMOVE:
-        return syscall_remove((const char *) arg1);
+        return syscall_remove ((const char *) arg1);
       case SYS_OPEN:
-        return syscall_open((const char *) arg1);
+        return syscall_open ((const char *) arg1);
       case SYS_FILESIZE:
-        return syscall_filesize(*(int *) arg1);
+        return syscall_filesize (*(int *) arg1);
       case SYS_TELL:
-        return syscall_tell(*(int *) arg1);
+        return syscall_tell (*(int *) arg1);
       case SYS_CLOSE:
-        syscall_close(*(int *) arg1);
-        break;
+        syscall_close (*(int *) arg1);
+      break;
       default:
-        syscall_exit(-1);
+        syscall_exit (-1);
     }
+  return 0;
 }
 
 static int double_arg_syscall (int syscall_no, void *arg1, void *arg2)
 {
-  switch (syscall_no) {
-    case SYS_CREATE:
-      return syscall_create((const char *) arg1, *(unsigned *) arg2);
-    case SYS_SEEK:
-      syscall_seek(*(int *) arg1, *(unsigned *) arg2);
+  switch (syscall_no)
+    {
+      case SYS_CREATE:
+        return syscall_create ((const char *) arg1, *(unsigned *) arg2);
+      case SYS_SEEK:
+        syscall_seek (*(int *) arg1, *(unsigned *) arg2);
       break;
-  }
+    }
+  return 0;
 }
 
 static int triple_arg_syscall (int syscall_no, void *arg1,
@@ -133,7 +136,7 @@ static int triple_arg_syscall (int syscall_no, void *arg1,
   switch (syscall_no)
     {
       case SYS_READ:
-        return syscall_read(*(int *) arg1, arg2, *(unsigned *) arg3);
+        return syscall_read (*(int *) arg1, arg2, *(unsigned *) arg3);
       case SYS_WRITE:
         return syscall_write (*(int *) arg1, arg2, *(unsigned *) arg3);
       default:
@@ -154,13 +157,14 @@ static pid_t syscall_exec (const char *file)
 
   if (user_memory_access_is_valid (file_ptr))
     {
-      char *exec[strlen(file_ptr)+1];
-      strlcpy(exec,file_ptr,strlen(file_ptr)+1);
+      char *exec[strlen (file_ptr) + 1];
+      strlcpy ((char *) exec, file_ptr, strlen (file_ptr) + 1);
       char *token, *save_ptr;
-      token = strtok_r (exec, " ", &save_ptr);
-      if(filesys_open(token) == NULL){
-        return TID_ERROR;
-      }
+      token = strtok_r ((char *) exec, " ", &save_ptr);
+      if (filesys_open (token) == NULL)
+        {
+          return TID_ERROR;
+        }
       return process_execute (file_ptr);
     }
   else
@@ -191,11 +195,12 @@ static bool syscall_create (const char *file, unsigned initial_size)
 static bool syscall_remove (const char *file)
 {
   //todo: consider the case when removing a open file.
-  char *file_ptr =  *(char **) file;
-  if (!user_memory_access_is_valid(file_ptr)) {
-    syscall_exit(-1);
-  }
-  return filesys_remove(file);
+  char *file_ptr = *(char **) file;
+  if (!user_memory_access_is_valid (file_ptr))
+    {
+      syscall_exit (-1);
+    }
+  return filesys_remove (file);
 }
 
 static int syscall_open (const char *file)
@@ -221,28 +226,29 @@ static int syscall_open (const char *file)
 
 static int syscall_filesize (int fd)
 {
-  struct thread* current_thread = thread_current();
-  struct file_node *file_node = file_node_lookup(fd, current_thread);
+  struct thread *current_thread = thread_current ();
+  struct file_node *file_node = file_node_lookup (fd, current_thread);
   if (file_node == NULL)
-  {
-    return -1;
-  }
-  return file_length(file_node->file);
+    {
+      return -1;
+    }
+  return file_length (file_node->file);
 }
 
-static int syscall_read (int fd, void *buffer, unsigned length) {
+static int syscall_read (int fd, void *buffer, unsigned length)
+{
   char *buffer_ptr = *(char **) (buffer);
-  struct file_node *file_node = file_node_lookup(fd, thread_current());
+  struct file_node *file_node = file_node_lookup (fd, thread_current ());
   if (!user_memory_access_is_valid (buffer_ptr) || file_node == NULL)
-  {
-    syscall_exit(-1);
-  }
+    {
+      syscall_exit (-1);
+    }
   if (fd == STDOUT_FILENO)
-  {
-    input_getc();
-    return 1;
-  }
-  return file_read(file_node->file, buffer_ptr, length);
+    {
+      input_getc ();
+      return 1;
+    }
+  return file_read (file_node->file, buffer_ptr, length);
 }
 
 static int syscall_write (int fd, const void *buffer, unsigned length)
@@ -258,53 +264,50 @@ static int syscall_write (int fd, const void *buffer, unsigned length)
         }
       else if (fd > STDOUT_FILENO)
         {
-          if (file_node_lookup (fd, thread_current ()) == NULL)
+          if (file_node_lookup (fd, thread_current ()) != NULL)
             {
-              syscall_exit (-1);
+              return file_write (file_node_lookup (fd, thread_current ())->file, buffer_ptr, length);
             }
-          return file_write (file_node_lookup (fd, thread_current ())->file, buffer_ptr, length);
-        }
-      else
-        {
-          syscall_exit (-1);
         }
     }
-  else
-    {
-      syscall_exit (-1);
+    else{
+      syscall_exit(-1);
     }
+  return 0;
 }
 
 static void syscall_seek (int fd, unsigned position)
 {
-  struct thread *current_thread = thread_current();
-  struct file_node *file_node = file_node_lookup(fd, current_thread);
-  if (file_node == NULL) {
-    return;
-  }
-  file_seek(file_node->file, position);
+  struct thread *current_thread = thread_current ();
+  struct file_node *file_node = file_node_lookup (fd, current_thread);
+  if (file_node == NULL)
+    {
+      return;
+    }
+  file_seek (file_node->file, position);
 }
 
-
-static unsigned syscall_tell(int fd) {
-  struct thread *current_thread = thread_current();
-  struct file_node *file_node = file_node_lookup(fd, current_thread);
-  if (file_node == NULL) {
-    return -1;
-  }
-  return file_tell(file_node->file);
+static unsigned syscall_tell (int fd)
+{
+  struct thread *current_thread = thread_current ();
+  struct file_node *file_node = file_node_lookup (fd, current_thread);
+  if (file_node == NULL)
+    {
+      return -1;
+    }
+  return file_tell (file_node->file);
 }
 
 static void syscall_close (int fd)
 {
-  struct thread *current_thread = thread_current();
+  struct thread *current_thread = thread_current ();
   struct file_node *file_node = file_node_lookup (fd, current_thread);
   if (file_node == NULL)
-  {
-    return;
-  }
-  hash_delete(&current_thread->hash_table_of_file_nodes, &file_node->hash_elem);
-  free_file_node(file_node);
+    {
+      return;
+    }
+  hash_delete (&current_thread->hash_table_of_file_nodes, &file_node->hash_elem);
+  free_file_node (file_node);
 }
 
 /* ---------------- HELPER FUNCTIONS ---------------- */
@@ -358,6 +361,7 @@ file_node_lookup (int fd, struct thread *t)
 }
 
 static void
-free_file_node(struct file_node *file_node) {
-  free(file_node);
+free_file_node (struct file_node *file_node)
+{
+  free (file_node);
 }
