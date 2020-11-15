@@ -97,6 +97,14 @@ start_process (void *file_name_)
       argc++;
     }
 
+  /* Set pid of this process's to its tid. */
+  lock_acquire(&process_lock);
+  hash_delete(&process_hashtable, &p->hash_elem);
+  p->pid = thread_current() -> tid;
+  hash_insert(&process_hashtable, &p->hash_elem);
+  lock_release(&process_lock);
+  sema_up(&p->process_sema);
+
   /* Initialize interrupt frame and load executable. */
   memset (&if_, 0, sizeof if_);
   if_.gs = if_.fs = if_.es = if_.ds = if_.ss = SEL_UDSEG;
@@ -138,18 +146,10 @@ start_process (void *file_name_)
   if_.esp -= sizeof(void *);
   memset(if_.esp, 0, sizeof(void *));
 
-  /* Set pid of this process's to its tid. */
-  lock_acquire(&process_lock);
-  hash_delete(&process_hashtable, &p->hash_elem);
-  p->pid = thread_current() -> tid;
-  hash_insert(&process_hashtable, &p->hash_elem);
-  lock_release(&process_lock);
-  sema_up(&p->process_sema);
-
   /* If load failed, quit. */
   palloc_free_page (file_name_);
   if (!success) 
-    thread_exit ();
+    process_exit_with_code(-1);
 
   /* Start the user process by simulating a return from an
      interrupt, implemented by intr_exit (in
@@ -235,6 +235,7 @@ process_exit_with_code(int exit_code) {
   struct process *p = process_lookup (thread_current ()->tid);
   p->exit_code = exit_code;
   lock_release(&process_lock);
+  file_allow_write (p->exec_file);
   sema_up (&p->process_sema);
 
   thread_exit ();
@@ -459,7 +460,12 @@ load (const char *file_name, void (**eip) (void), void **esp)
 
   success = true;
   file_deny_write(file);
-  thread_current()->file = file;
+
+  lock_acquire(&process_lock);
+  struct process *p = process_lookup(thread_current()->tid);
+  lock_release(&process_lock);
+  p->exec_file = file;
+
  done:
   /* We arrive here whether the load is successful or not. Denying writes to the this executable.*/
 

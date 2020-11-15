@@ -18,6 +18,7 @@ struct process {
   struct semaphore process_sema;
   struct hash_elem hash_elem;
   struct list_elem list_elem;
+  struct file *exec_file;
   tid_t parent_tid;
   bool waited_on;
   pid_t pid;
