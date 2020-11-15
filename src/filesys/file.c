@@ -1,5 +1,6 @@
 #include "filesys/file.h"
 #include <debug.h>
+#include <threads/thread.h>
 #include "filesys/inode.h"
 #include "threads/malloc.h"
 
@@ -119,7 +120,8 @@ void
 file_deny_write (struct file *file) 
 {
   ASSERT (file != NULL);
-  if (!file->deny_write) 
+
+  if (!file->deny_write)
     {
       file->deny_write = true;
       inode_deny_write (file->inode);
