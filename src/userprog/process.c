@@ -7,6 +7,7 @@
 #include "userprog/gdt.h"
 #include "userprog/pagedir.h"
 #include "userprog/tss.h"
+#include "userprog/syscall.h"
 #include "filesys/directory.h"
 #include "filesys/file.h"
 #include "filesys/filesys.h"
@@ -219,6 +220,13 @@ static void free_all_children_process (void) {
     }
 }
 
+static void free_open_files (struct hash_elem *element, void *aux) {
+  struct file_node *fn = hash_entry (element, struct file_node, hash_elem);
+  file_allow_write(fn->file);
+  hash_delete (&thread_current()->hash_table_of_file_nodes, element);
+  free(fn);
+}
+
 void
 process_exit_with_code(int exit_code) {
   /* Print exit message. */
@@ -236,6 +244,7 @@ process_exit_with_code(int exit_code) {
   p->exit_code = exit_code;
   lock_release(&process_lock);
   file_allow_write (p->exec_file);
+  hash_destroy (&thread_current()->hash_table_of_file_nodes, free_open_files);
   sema_up (&p->process_sema);
 
   thread_exit ();

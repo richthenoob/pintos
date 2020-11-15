@@ -158,16 +158,23 @@ static pid_t syscall_exec (const char *file)
 {
   char *file_ptr = *(char **) file;
 
-  if (user_memory_access_is_valid (file_ptr) && user_memory_access_string(file_ptr))
+  if (user_memory_access_is_valid (file_ptr)
+      && user_memory_access_string (file_ptr))
     {
       char *exec[strlen (file_ptr) + 1];
       strlcpy ((char *) exec, file_ptr, strlen (file_ptr) + 1);
       char *token, *save_ptr;
       token = strtok_r ((char *) exec, " ", &save_ptr);
-      if (filesys_open (token) == NULL)
-        {
-          return TID_ERROR;
-        }
+// TODO: fix issue with testing file exists - refer to tests syn-read vs exec-missing
+//      lock_acquire (&filesys_lock);
+//      struct file *test_open = filesys_open (token);
+//      if (!test_open)
+//        {
+//          lock_release (&filesys_lock);
+//          return TID_ERROR;
+//        }
+//      file_close (test_open);
+//      lock_release (&filesys_lock);
       return process_execute (file_ptr);
     }
   else
@@ -192,7 +199,10 @@ static bool syscall_create (const char *file, unsigned initial_size)
     {
       return false;
     }
-  return filesys_create (file_ptr, initial_size);
+  lock_acquire (&filesys_lock);
+  bool success = filesys_create (file_ptr, initial_size);
+  lock_release (&filesys_lock);
+  return success;
 }
 
 static bool syscall_remove (const char *file)
@@ -203,7 +213,10 @@ static bool syscall_remove (const char *file)
     {
       syscall_exit (-1);
     }
-  return filesys_remove (file);
+  lock_acquire (&filesys_lock);
+  bool success = filesys_remove (file);
+  lock_release (&filesys_lock);
+  return success;
 }
 
 static int syscall_open (const char *file)
@@ -213,7 +226,9 @@ static int syscall_open (const char *file)
     {
       syscall_exit (-1);
     }
+  lock_acquire (&filesys_lock);
   struct file *opened_file = filesys_open (file_ptr);
+  lock_release (&filesys_lock);
   if (!opened_file)
     {
       return -1;
@@ -230,87 +245,113 @@ static int syscall_open (const char *file)
 static int syscall_filesize (int fd)
 {
   struct thread *current_thread = thread_current ();
+  lock_acquire (&filesys_lock);
   struct file_node *file_node = file_node_lookup (fd, current_thread);
   if (file_node == NULL)
     {
+      lock_release (&filesys_lock);
       return -1;
     }
-  return file_length (file_node->file);
+
+  int length = file_length (file_node->file);
+  lock_release (&filesys_lock);
+  return length;
 }
 
 static int syscall_read (int fd, void *buffer, unsigned length)
 {
   char *buffer_ptr = *(char **) (buffer);
+  lock_acquire (&filesys_lock);
   struct file_node *file_node = file_node_lookup (fd, thread_current ());
-  if (!user_memory_access_is_valid (buffer_ptr) || file_node == NULL || !user_memory_access_buffer(buffer_ptr,length))
+  if (!user_memory_access_is_valid (buffer_ptr) || file_node == NULL
+      || !user_memory_access_buffer (buffer_ptr, length))
     {
+      lock_release (&filesys_lock);
       syscall_exit (-1);
     }
   if (fd == STDOUT_FILENO)
     {
       input_getc ();
+      lock_release (&filesys_lock);
       return 1;
     }
-  return file_read (file_node->file, buffer_ptr, length);
+
+  int read_length = file_read (file_node->file, buffer_ptr, length);
+  lock_release (&filesys_lock);
+  return read_length;
 }
 
 static int syscall_write (int fd, const void *buffer, unsigned length)
 {
   char *buffer_ptr = *(char **) (buffer);
-  if (user_memory_access_is_valid (buffer_ptr) && user_memory_access_buffer(buffer_ptr,length))
+  if (!user_memory_access_is_valid (buffer_ptr)
+      || !user_memory_access_buffer (buffer_ptr, length))
     {
+      syscall_exit (-1);
+    }
+
 //      void *user_ptr = pagedir_get_page (thread_current ()->pagedir, buffer_ptr);
-      if (fd == STDOUT_FILENO)
-        {
-          putbuf (buffer_ptr, length);
-          return length;
-        }
-      else if (fd > STDOUT_FILENO)
-        {
-          if (file_node_lookup (fd, thread_current ()) != NULL)
-            {
-              return file_write (file_node_lookup (fd, thread_current ())->file, buffer_ptr, length);
-            }
-        }
+
+  lock_acquire (&filesys_lock);
+  int bytes_written;
+  if (fd == STDOUT_FILENO)
+    {
+      putbuf (buffer_ptr, length);
+      bytes_written = length;
     }
-    else{
-      syscall_exit(-1);
+  else if (fd > STDOUT_FILENO && file_node_lookup (fd, thread_current ()) != NULL)
+    {
+      bytes_written = file_write (file_node_lookup (fd, thread_current ())->file, buffer_ptr, length);
     }
-  return 0;
+  else
+    {
+      bytes_written = 0;
+    }
+  lock_release (&filesys_lock);
+  return bytes_written;
 }
 
 static void syscall_seek (int fd, unsigned position)
 {
   struct thread *current_thread = thread_current ();
+  lock_acquire(&filesys_lock);
   struct file_node *file_node = file_node_lookup (fd, current_thread);
   if (file_node == NULL)
     {
       return;
     }
   file_seek (file_node->file, position);
+  lock_release (&filesys_lock);
 }
 
 static unsigned syscall_tell (int fd)
 {
   struct thread *current_thread = thread_current ();
+  lock_acquire(&filesys_lock);
   struct file_node *file_node = file_node_lookup (fd, current_thread);
   if (file_node == NULL)
     {
+      lock_release(&filesys_lock);
       return -1;
     }
-  return file_tell (file_node->file);
+  unsigned next_byte_pos = file_tell (file_node->file);
+  lock_release(&filesys_lock);
+  return next_byte_pos;
 }
 
 static void syscall_close (int fd)
 {
   struct thread *current_thread = thread_current ();
+  lock_acquire(&filesys_lock);
   struct file_node *file_node = file_node_lookup (fd, current_thread);
   if (file_node == NULL)
     {
+      lock_release(&filesys_lock);
       return;
     }
   hash_delete (&current_thread->hash_table_of_file_nodes, &file_node->hash_elem);
   free_file_node (file_node);
+  lock_release(&filesys_lock);
 }
 
 /* ---------------- HELPER FUNCTIONS ---------------- */
@@ -324,16 +365,16 @@ user_memory_access_is_valid (void *user_ptr)
 }
 
 static bool
-user_memory_access_buffer (void *user_ptr, unsigned length
-){
-  return is_user_vaddr(user_ptr + length);
+user_memory_access_buffer (void *user_ptr, unsigned length)
+{
+  return is_user_vaddr (user_ptr + length);
 }
 
 static bool
-user_memory_access_string (void *user_ptr
-){
+user_memory_access_string (void *user_ptr)
+{
   unsigned difference = PHYS_BASE - user_ptr + 1;
-  return strnlen(user_ptr,difference) < difference;
+  return strnlen (user_ptr, difference) < difference;
 }
 
 static int

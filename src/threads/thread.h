@@ -6,6 +6,7 @@
 #include <stdint.h>
 #ifdef USERPROG
 #include <lib/kernel/hash.h>
+#include "synch.h"
 #endif
 
 /* States in a thread's life cycle. */
@@ -109,6 +110,7 @@ struct thread
 };
 
 struct hash process_hashtable;
+struct lock filesys_lock;
 
 /* If false (default), use round-robin scheduler.
    If true, use multi-level feedback queue scheduler.
