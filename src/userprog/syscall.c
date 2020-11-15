@@ -13,6 +13,7 @@
 #include "userprog/process.h"
 #include "threads/malloc.h"
 #include "lib/string.h"
+#include "filesys/directory.h"
 
 #define SINGLE_ARG_SYSCALL_CUTOFF 8
 #define DOUBLE_ARG_SYSCALL_CUTOFF 10
@@ -28,17 +29,19 @@ static void syscall_exit (int exit_code) NO_RETURN;
 static pid_t syscall_exec (const char *file);
 static int syscall_wait (pid_t pid);
 static bool syscall_create (const char *file, unsigned initial_size);
-static bool syscall_remove (const char *file);
+//static bool syscall_remove (const char *file);
 static int syscall_open (const char *file);
-static int syscall_filesize (int fd);
-static int syscall_read (int fd, void *buffer, unsigned length);
+//static int syscall_filesize (int fd);
+//static int syscall_read (int fd, void *buffer, unsigned length);
 static int syscall_write (int fd, const void *buffer, unsigned length);
-static int syscall_seek (int fd, unsigned position);
-static unsigned syscall_tell (int fd);
-static void syscall_close (int fd);
+//static int syscall_seek (int fd, unsigned position);
+//static unsigned syscall_tell (int fd);
+//static void syscall_close (int fd);
 
 static bool user_memory_access_is_valid (void *user_ptr);
 static int next_fd_value (void);
+static struct file_node *
+file_node_lookup (int fd, struct thread *t);
 
 void
 syscall_init (void)
@@ -105,7 +108,13 @@ static int single_arg_syscall (int syscall_no, void *arg1)
 
 static int double_arg_syscall (int syscall_no, void *arg1, void *arg2)
 {
-  return 0;
+  switch (syscall_no)
+    {
+      case SYS_CREATE:
+        return syscall_create (arg1, *(unsigned *) arg2);
+      default:
+        syscall_exit (-1);
+    }
 }
 
 static int triple_arg_syscall (int syscall_no, void *arg1,
@@ -124,18 +133,27 @@ static int triple_arg_syscall (int syscall_no, void *arg1,
 static void syscall_exit (int exit_code)
 {
   process_exit_with_code (exit_code);
+  NOT_REACHED()
 }
 
 static pid_t syscall_exec (const char *file)
 {
   char *file_ptr = *(char **) file;
+
   if (user_memory_access_is_valid (file_ptr))
     {
+      char *exec[strlen(file_ptr)+1];
+      strlcpy(exec,file_ptr,strlen(file_ptr)+1);
+      char *token, *save_ptr;
+      token = strtok_r (exec, " ", &save_ptr);
+      if(filesys_open(token) == NULL){
+        return TID_ERROR;
+      }
       return process_execute (file_ptr);
     }
   else
     {
-      syscall_exit (-1);
+      return TID_ERROR;
     }
 }
 
@@ -146,8 +164,16 @@ static int syscall_wait (pid_t pid)
 
 static bool syscall_create (const char *file, unsigned initial_size)
 {
-  //TODO: check to see if valid file pointer; Synchronization.
-  return filesys_create (file, initial_size);
+  char *file_ptr = *(char **) file;
+  if (!user_memory_access_is_valid (file_ptr) || strcmp (file_ptr, "") == 0)
+    {
+      syscall_exit (-1);
+    }
+  if (strlen (file_ptr) > NAME_MAX)
+    {
+      return false;
+    }
+  return filesys_create (file_ptr, initial_size);
 }
 
 static int syscall_open (const char *file)
@@ -196,6 +222,19 @@ static int syscall_write (int fd, const void *buffer, unsigned length)
       if (fd == STDOUT_FILENO)
         {
           putbuf (buffer_ptr, length);
+          return length;
+        }
+      else if (fd > STDOUT_FILENO)
+        {
+          if (file_node_lookup (fd, thread_current ()) == NULL)
+            {
+              syscall_exit (-1);
+            }
+          return file_write (file_node_lookup (fd, thread_current ())->file, buffer, length);
+        }
+      else
+        {
+          syscall_exit (-1);
         }
     }
   else
@@ -242,4 +281,14 @@ file_node_less (const struct hash_elem *a_,
   const struct file_node *a = hash_entry (a_, struct file_node, hash_elem);
   const struct file_node *b = hash_entry (b_, struct file_node, hash_elem);
   return a->fd < b->fd;
+}
+
+static struct file_node *
+file_node_lookup (int fd, struct thread *t)
+{
+  struct file_node file_node;
+  struct hash_elem *e;
+  file_node.fd = fd;
+  e = hash_find (&t->hash_table_of_file_nodes, &file_node.hash_elem);
+  return e != NULL ? hash_entry (e, struct file_node, hash_elem) : NULL;
 }

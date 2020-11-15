@@ -101,6 +101,8 @@ struct thread
 #ifdef USERPROG
     /* Owned by userprog/process.c. */
     uint32_t *pagedir;                  /* Page directory. */
+    struct list child_processes_list;   /* List of processes this thread has
+                                           spawned using exec. */
 #endif
 
     /* Owned by thread.c. */

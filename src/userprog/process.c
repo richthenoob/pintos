@@ -21,7 +21,10 @@
 static thread_func start_process NO_RETURN;
 static bool load (const char *cmdline, void (**eip) (void), void **esp);
 
+/* Locates a process in process_hashtable given a pid. Must hold process_lock
+  before calling this function. */
 struct process *process_lookup (const int pid) {
+  ASSERT (lock_held_by_current_thread (&process_lock))
   struct process p;
   struct hash_elem *e;
   p.pid = pid;
@@ -49,7 +52,12 @@ process_execute (const char *file_name)
   sema_init(&p->process_sema, 0);
   p->pid = -1;
   p->exit_code = -10;
+  p->parent_tid = -20;
+  p->waited_on = false;
+  lock_acquire(&process_lock);
   hash_insert (&process_hashtable, &p->hash_elem);
+  list_push_back (&thread_current()->child_processes_list, &p->list_elem);
+  lock_release(&process_lock);
 
   memcpy (fn_copy, &p, sizeof(struct process **));
   memcpy (fn_copy + sizeof(struct process **), file_name, PGSIZE - sizeof(struct process **));
@@ -61,6 +69,7 @@ process_execute (const char *file_name)
     palloc_free_page (fn_copy);
     return -1;
   }
+  p->parent_tid = thread_current()->tid;
   return tid;
 
 }
@@ -94,6 +103,7 @@ start_process (void *file_name_)
   if_.cs = SEL_UCSEG;
   if_.eflags = FLAG_IF | FLAG_MBS;
   success = load (file_name, &if_.eip, &if_.esp);
+
   /* Set up stack. */
 
   /* Push arguments in reverse order, storing each address into argv_addr. */
@@ -128,9 +138,12 @@ start_process (void *file_name_)
   if_.esp -= sizeof(void *);
   memset(if_.esp, 0, sizeof(void *));
 
+  /* Set pid of this process's to its tid. */
+  lock_acquire(&process_lock);
   hash_delete(&process_hashtable, &p->hash_elem);
   p->pid = thread_current() -> tid;
   hash_insert(&process_hashtable, &p->hash_elem);
+  lock_release(&process_lock);
   sema_up(&p->process_sema);
 
   /* If load failed, quit. */
@@ -160,27 +173,69 @@ start_process (void *file_name_)
 int
 process_wait (tid_t child_tid)
 {
+  lock_acquire(&process_lock);
   struct process *p = process_lookup (child_tid);
-  if (p == NULL) {
-    printf("%s waiting for pid: %d but could not find!\n", thread_name(), child_tid);
-    return 0;
+  lock_release(&process_lock);
+  if (p == NULL || p->parent_tid != thread_current()->tid || p->waited_on) {
+    return -1;
   }
+
+  /* Child process exists in process_hashtable, so wait on it. */
+  p->waited_on = true;
+
+  /* Wait for child if it hasn't yet exited. */
   if (p->exit_code == -10) {
     sema_down(&p->process_sema);
   }
-  return p->exit_code;
+  int exit_code = p->exit_code;
+
+  /* Child has successfully exited, so remove from process hashtable and
+     child_processes_list then free memory. */
+  lock_acquire(&process_lock);
+  struct hash_elem *returned_hash = hash_delete (&process_hashtable, &p->hash_elem);
+  ASSERT (returned_hash != NULL);
+  list_remove (&p->list_elem);
+  free(p);
+  lock_release (&process_lock);
+
+  return exit_code;
+}
+
+/* Release memory associated with child processes it has created. Must hold
+   process_lock before calling this function. */
+static void free_all_children_process (void) {
+  ASSERT (lock_held_by_current_thread (&process_lock));
+  struct list_elem *e;
+  struct process *p;
+  struct hash_elem *returned_hash;
+  struct list *child_list = &thread_current()->child_processes_list;
+  for (e = list_begin (child_list); e != list_end (child_list);
+       e = list_next (e))
+    {
+      p = list_entry (e, struct process, list_elem);
+      returned_hash = hash_delete (&process_hashtable, &p->hash_elem);
+      ASSERT (returned_hash != NULL);
+      free(p);
+    }
 }
 
 void
 process_exit_with_code(int exit_code) {
-  struct process *p = process_lookup (thread_current ()->tid);
-  p->exit_code = exit_code;
-  sema_up (&p->process_sema);
-
+  /* Print exit message. */
   char *name = thread_name ();
   char *token, *save_ptr;
   token = strtok_r (name, " ", &save_ptr);
   printf ("%s: exit(%d)\n", token, exit_code);
+
+  /* Free all of its children processes in process hashtable. */
+  lock_acquire(&process_lock);
+  free_all_children_process();
+
+  /* Signal to parent process that this thread is done. */
+  struct process *p = process_lookup (thread_current ()->tid);
+  p->exit_code = exit_code;
+  lock_release(&process_lock);
+  sema_up (&p->process_sema);
 
   thread_exit ();
 }
@@ -406,11 +461,11 @@ load (const char *file_name, void (**eip) (void), void **esp)
   *eip = (void (*) (void)) ehdr.e_entry;
 
   success = true;
-
- done:
-  /* We arrive here whether the load is successful or not. Denying writes to the this executable.*/
   file_deny_write(file);
   thread_current()->file = file;
+ done:
+  /* We arrive here whether the load is successful or not. Denying writes to the this executable.*/
+
 
   return success;
 }
