@@ -40,6 +40,9 @@ static unsigned syscall_tell (int fd);
 static void syscall_close (int fd);
 
 static bool user_memory_access_is_valid (void *user_ptr);
+static bool user_memory_access_buffer (void *user_ptr, unsigned length);
+static bool user_memory_access_string (void *user_ptr);
+
 static int next_fd_value (void);
 static struct file_node *file_node_lookup (int fd, struct thread *t);
 static void free_file_node (struct file_node *file_node);
@@ -155,7 +158,7 @@ static pid_t syscall_exec (const char *file)
 {
   char *file_ptr = *(char **) file;
 
-  if (user_memory_access_is_valid (file_ptr))
+  if (user_memory_access_is_valid (file_ptr) && user_memory_access_string(file_ptr))
     {
       char *exec[strlen (file_ptr) + 1];
       strlcpy ((char *) exec, file_ptr, strlen (file_ptr) + 1);
@@ -239,7 +242,7 @@ static int syscall_read (int fd, void *buffer, unsigned length)
 {
   char *buffer_ptr = *(char **) (buffer);
   struct file_node *file_node = file_node_lookup (fd, thread_current ());
-  if (!user_memory_access_is_valid (buffer_ptr) || file_node == NULL)
+  if (!user_memory_access_is_valid (buffer_ptr) || file_node == NULL || !user_memory_access_buffer(buffer_ptr,length))
     {
       syscall_exit (-1);
     }
@@ -254,7 +257,7 @@ static int syscall_read (int fd, void *buffer, unsigned length)
 static int syscall_write (int fd, const void *buffer, unsigned length)
 {
   char *buffer_ptr = *(char **) (buffer);
-  if (user_memory_access_is_valid (buffer_ptr))
+  if (user_memory_access_is_valid (buffer_ptr) && user_memory_access_buffer(buffer_ptr,length))
     {
 //      void *user_ptr = pagedir_get_page (thread_current ()->pagedir, buffer_ptr);
       if (fd == STDOUT_FILENO)
@@ -318,6 +321,19 @@ user_memory_access_is_valid (void *user_ptr)
   return !(user_ptr == NULL ||
            !is_user_vaddr (user_ptr) ||
            pagedir_get_page (thread_current ()->pagedir, user_ptr) == NULL);
+}
+
+static bool
+user_memory_access_buffer (void *user_ptr, unsigned length
+){
+  return is_user_vaddr(user_ptr + length);
+}
+
+static bool
+user_memory_access_string (void *user_ptr
+){
+  unsigned difference = PHYS_BASE - user_ptr + 1;
+  return strnlen(user_ptr,difference) < difference;
 }
 
 static int
