@@ -23,5 +23,4 @@ struct process {
   pid_t pid;
   int exit_code;
 };
-
 #endif /* userprog/process.h */

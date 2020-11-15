@@ -6,6 +6,7 @@
 #include <filesys/filesys.h>
 #include <filesys/file.h>
 #include <threads/synch.h>
+#include <devices/input.h>
 #include "threads/interrupt.h"
 #include "threads/thread.h"
 #include "userprog/pagedir.h"
@@ -34,14 +35,14 @@ static int syscall_open (const char *file);
 //static int syscall_filesize (int fd);
 //static int syscall_read (int fd, void *buffer, unsigned length);
 static int syscall_write (int fd, const void *buffer, unsigned length);
-//static int syscall_seek (int fd, unsigned position);
-//static unsigned syscall_tell (int fd);
-//static void syscall_close (int fd);
+static void syscall_seek (int fd, unsigned position);
+static unsigned syscall_tell (int fd);
+static void syscall_close (int fd);
 
 static bool user_memory_access_is_valid (void *user_ptr);
 static int next_fd_value (void);
-static struct file_node *
-file_node_lookup (int fd, struct thread *t);
+static struct file_node *file_node_lookup (int fd, struct thread *t);
+static void free_file_node(struct file_node *file_node);
 
 void
 syscall_init (void)
@@ -99,22 +100,31 @@ static int single_arg_syscall (int syscall_no, void *arg1)
         return syscall_exec (arg1);
       case SYS_WAIT:
         return syscall_wait (*(pid_t *) arg1);
+      case SYS_REMOVE:
+        return syscall_remove((const char *) arg1);
       case SYS_OPEN:
-        return syscall_open (arg1);
+        return syscall_open((const char *) arg1);
+      case SYS_FILESIZE:
+        return syscall_filesize(*(int *) arg1);
+      case SYS_TELL:
+        return syscall_tell(*(int *) arg1);
+      case SYS_CLOSE:
+        syscall_close(*(int *) arg1);
+        break;
       default:
-        syscall_exit (-1);
+        syscall_exit(-1);
     }
 }
 
 static int double_arg_syscall (int syscall_no, void *arg1, void *arg2)
 {
-  switch (syscall_no)
-    {
-      case SYS_CREATE:
-        return syscall_create (arg1, *(unsigned *) arg2);
-      default:
-        syscall_exit (-1);
-    }
+  switch (syscall_no) {
+    case SYS_CREATE:
+      return syscall_create((const char *) arg1, *(unsigned *) arg2);
+    case SYS_SEEK:
+      syscall_seek(*(int *) arg1, *(unsigned *) arg2);
+      break;
+  }
 }
 
 static int triple_arg_syscall (int syscall_no, void *arg1,
@@ -122,6 +132,8 @@ static int triple_arg_syscall (int syscall_no, void *arg1,
 {
   switch (syscall_no)
     {
+      case SYS_READ:
+        return syscall_read(*(int *) arg1, arg2, *(unsigned *) arg3);
       case SYS_WRITE:
         return syscall_write (*(int *) arg1, arg2, *(unsigned *) arg3);
       default:
@@ -176,21 +188,30 @@ static bool syscall_create (const char *file, unsigned initial_size)
   return filesys_create (file_ptr, initial_size);
 }
 
+static bool syscall_remove (const char *file)
+{
+  //todo: consider the case when removing a open file.
+  char *file_ptr =  *(char **) file;
+  if (!user_memory_access_is_valid(file_ptr)) {
+    syscall_exit(-1);
+  }
+  return filesys_remove(file);
+}
+
 static int syscall_open (const char *file)
 {
-  //hashtable version
   char *file_ptr = *(char **) file;
   if (!user_memory_access_is_valid (file_ptr))
     {
       syscall_exit (-1);
     }
-  struct file *file1 = filesys_open (file_ptr);
-  if (!file1)
+  struct file *opened_file = filesys_open (file_ptr);
+  if (!opened_file)
     {
       return -1;
     }
   struct file_node *node = malloc (sizeof (*node));
-  node->file = file1;
+  node->file = opened_file;
 
   struct thread *current_thread = thread_current ();
   node->fd = next_fd_value ();
@@ -198,20 +219,31 @@ static int syscall_open (const char *file)
   return node->fd;
 }
 
-//static int syscall_filesize(struct intr_frame *f) {
-//    int target_fd_value = *((int *)(f->esp + 4));
-//    struct thread* current_thread = thread_current();
-//    struct list_elem *e;
-//    for (e = list_begin (&current_thread->fd_elems);
-//         e != list_end (&current_thread->fd_elems);
-//         e = list_next (e))
-//    {
-//        struct file_descriptor *fd = list_entry (e, struct file_descriptor, elem);
-//        if (fd->value == target_fd_value) {
-//            return file_length(fd->file);
-//        }
-//    }
-//}
+static int syscall_filesize (int fd)
+{
+  struct thread* current_thread = thread_current();
+  struct file_node *file_node = file_node_lookup(fd, current_thread);
+  if (file_node == NULL)
+  {
+    return -1;
+  }
+  return file_length(file_node->file);
+}
+
+static int syscall_read (int fd, void *buffer, unsigned length) {
+  char *buffer_ptr = *(char **) (buffer);
+  struct file_node *file_node = file_node_lookup(fd, thread_current());
+  if (!user_memory_access_is_valid (buffer_ptr) || file_node == NULL)
+  {
+    syscall_exit(-1);
+  }
+  if (fd == STDOUT_FILENO)
+  {
+    input_getc();
+    return 1;
+  }
+  return file_read(file_node->file, buffer, length);
+}
 
 static int syscall_write (int fd, const void *buffer, unsigned length)
 {
@@ -241,6 +273,38 @@ static int syscall_write (int fd, const void *buffer, unsigned length)
     {
       syscall_exit (-1);
     }
+}
+
+static void syscall_seek (int fd, unsigned position)
+{
+  struct thread *current_thread = thread_current();
+  struct file_node *file_node = file_node_lookup(fd, current_thread);
+  if (file_node == NULL) {
+    return;
+  }
+  file_seek(file_node->file, position);
+}
+
+
+static unsigned syscall_tell(int fd) {
+  struct thread *current_thread = thread_current();
+  struct file_node *file_node = file_node_lookup(fd, current_thread);
+  if (file_node == NULL) {
+    return -1;
+  }
+  return file_tell(file_node->file);
+}
+
+static void syscall_close (int fd)
+{
+  struct thread *current_thread = thread_current();
+  struct file_node *file_node = file_node_lookup (fd, current_thread);
+  if (file_node == NULL)
+  {
+    return;
+  }
+  hash_delete(&current_thread->hash_table_of_file_nodes, &file_node->hash_elem);
+  free_file_node(file_node);
 }
 
 /* ---------------- HELPER FUNCTIONS ---------------- */
@@ -291,4 +355,9 @@ file_node_lookup (int fd, struct thread *t)
   file_node.fd = fd;
   e = hash_find (&t->hash_table_of_file_nodes, &file_node.hash_elem);
   return e != NULL ? hash_entry (e, struct file_node, hash_elem) : NULL;
+}
+
+static void
+free_file_node(struct file_node *file_node) {
+  free(file_node);
 }

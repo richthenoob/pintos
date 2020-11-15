@@ -230,7 +230,9 @@ thread_create (const char *name, int priority,
 
   intr_set_level (old_level);
 
+  /* Initialise the hash table for file descriptors. */
   hash_init(&(t->hash_table_of_file_nodes), file_node_hash, file_node_less, NULL);
+
   /* Add to run queue. */
   thread_unblock (t);
 
