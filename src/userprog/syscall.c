@@ -382,11 +382,7 @@ next_fd_value (void)
 {
   static tid_t next_fd = 2;
   tid_t tid;
-
-//    lock_acquire (&fd_lock);
   tid = next_fd++;
-//    lock_release (&fd_lock);
-
   return tid;
 }
 
