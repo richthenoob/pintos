@@ -204,14 +204,13 @@ static bool syscall_create (const char *file, unsigned initial_size)
 
 static bool syscall_remove (const char *file)
 {
-  //todo: consider the case when removing a open file.
   char *file_ptr = *(char **) file;
   if (!user_memory_access_is_valid (file_ptr))
     {
       syscall_exit (DEFAULT_ERR_EXIT_CODE);
     }
   lock_acquire (&filesys_lock);
-  bool success = filesys_remove (file);
+  bool success = filesys_remove (file_ptr);
   lock_release (&filesys_lock);
   return success;
 }
