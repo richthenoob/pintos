@@ -424,12 +424,3 @@ void free_file_node (struct hash_elem *element, void *aux UNUSED) {
   hash_delete (&thread_current()->hash_table_of_file_nodes, element);
   free(fn);
 }
-
-void get_first_word (const char *src, char *dest)
-{
-  char tmp[strlen (src) + 1];
-  strlcpy (tmp, src, strlen (dest) + 1);
-  char *token, *save_ptr;
-  token = strtok_r (tmp, " ", &save_ptr);
-  strlcpy (dest, token, strlen(dest));
-}

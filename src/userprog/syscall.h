@@ -20,6 +20,4 @@ file_node_less(const struct hash_elem *a_, const struct hash_elem *b_, void *aux
 
 void free_file_node (struct hash_elem *element, void *aux);
 
-void get_first_word (const char *src, char *dest);
-
 #endif /* userprog/syscall.h */

@@ -239,9 +239,10 @@ static void free_all_children_process (void) {
 void
 process_exit_with_code(int exit_code) {
   /* Print exit message. */
-  char first_word[NAME_MAX];
-  get_first_word (thread_current()->name, first_word);
-  printf ("%s: exit(%d)\n", first_word, exit_code);
+  char *name = thread_name ();
+  char *token, *save_ptr;
+  token = strtok_r (name, " ", &save_ptr);
+  printf ("%s: exit(%d)\n", token, exit_code);
 
   /* Free all of its children processes in process hashtable. */
   lock_acquire(&process_lock);
