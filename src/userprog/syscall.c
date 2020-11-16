@@ -350,7 +350,6 @@ static void syscall_close (int fd)
       lock_release(&filesys_lock);
       return;
     }
-  hash_delete (&current_thread->hash_table_of_file_nodes, &file_node->hash_elem);
   free_file_node (&file_node->hash_elem, NULL);
   lock_release(&filesys_lock);
 }
@@ -420,7 +419,7 @@ file_node_lookup (int fd, struct thread *t)
 
 void free_file_node (struct hash_elem *element, void *aux UNUSED) {
   struct file_node *fn = hash_entry (element, struct file_node, hash_elem);
-  file_allow_write(fn->file);
+  file_close (fn->file);
   hash_delete (&thread_current()->hash_table_of_file_nodes, element);
   free(fn);
 }

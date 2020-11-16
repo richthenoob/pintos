@@ -6,6 +6,7 @@
 #include "lib/user/syscall.h"
 #include "threads/synch.h"
 
+#define ERROR_CODE_FAILED_LOAD (-11)
 #define DEFAULT_ERROR_CODE (-10)
 #define DEFAULT_PARENT_TID (-20)
 
