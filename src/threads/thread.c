@@ -12,6 +12,7 @@
 #include "threads/switch.h"
 #include "threads/synch.h"
 #include "threads/vaddr.h"
+#include "userprog/process.h"
 #ifdef USERPROG
 #include "userprog/process.h"
 #include "threads/malloc.h"
@@ -72,6 +73,18 @@ static void *alloc_frame (struct thread *, size_t size);
 static void schedule (void);
 void thread_schedule_tail (struct thread *prev);
 static tid_t allocate_tid (void);
+
+static unsigned process_hash (const struct hash_elem *p_, void *aux UNUSED) {
+  struct process *p = hash_entry (p_, struct process, hash_elem);
+  return hash_int(p->pid);
+}
+
+static bool process_less(const struct hash_elem *a_, const struct hash_elem *b_,
+                         void *aux UNUSED) {
+  struct process *a = hash_entry (a_, struct process, hash_elem);
+  struct process *b = hash_entry (b_, struct process, hash_elem);
+  return a->pid < b->pid;
+}
 
 /* Initializes the threading system by transforming the code
    that's currently running into a thread.  This can't work in

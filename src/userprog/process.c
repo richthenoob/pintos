@@ -22,18 +22,6 @@
 static thread_func start_process NO_RETURN;
 static bool load (const char *cmdline, void (**eip) (void), void **esp);
 
-unsigned process_hash (const struct hash_elem *p_, void *aux UNUSED) {
-  struct process *p = hash_entry (p_, struct process, hash_elem);
-  return hash_int(p->pid);
-}
-
-bool process_less(const struct hash_elem *a_, const struct hash_elem *b_,
-                  void *aux UNUSED) {
-  struct process *a = hash_entry (a_, struct process, hash_elem);
-  struct process *b = hash_entry (b_, struct process, hash_elem);
-  return a->pid < b->pid;
-}
-
 /* Locates a process in process_hashtable given a pid. Must hold process_lock
   before calling this function. */
 struct process *process_lookup (const int pid) {

@@ -30,7 +30,4 @@ void process_exit_with_code(int exit_code);
 
 struct lock process_lock;
 struct process *process_lookup (const int pid);
-unsigned process_hash (const struct hash_elem *p_, void *aux UNUSED);
-bool process_less(const struct hash_elem *a_, const struct hash_elem *b_,
-                  void *aux UNUSED);
 #endif /* userprog/process.h */
