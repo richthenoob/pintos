@@ -4,6 +4,7 @@
 #include <random.h>
 #include <stdio.h>
 #include <string.h>
+#include <userprog/syscall.h>
 #include "threads/flags.h"
 #include "threads/interrupt.h"
 #include "threads/intr-stubs.h"
@@ -13,6 +14,7 @@
 #include "threads/vaddr.h"
 #ifdef USERPROG
 #include "userprog/process.h"
+#include "threads/malloc.h"
 #endif
 
 /* Random value for struct thread's `magic' member.
@@ -90,6 +92,7 @@ thread_init (void)
   ASSERT (intr_get_level () == INTR_OFF);
 
   lock_init (&tid_lock);
+  lock_init (&filesys_lock);
   list_init (&ready_list);
   list_init (&all_list);
 
@@ -115,6 +118,9 @@ thread_start (void)
 
   /* Wait for the idle thread to initialize idle_thread. */
   sema_down (&idle_started);
+
+  hash_init (&process_hashtable, process_hash, process_less, NULL);
+  lock_init (&process_lock);
 }
 
 /* Returns the number of threads currently in the ready list */
@@ -212,6 +218,9 @@ thread_create (const char *name, int priority,
   sf->ebp = 0;
 
   intr_set_level (old_level);
+
+  /* Initialise the hash table for file descriptors. */
+  hash_init(&(t->hash_table_of_file_nodes), file_node_hash, file_node_less, NULL);
 
   /* Add to run queue. */
   thread_unblock (t);
@@ -478,7 +487,7 @@ init_thread (struct thread *t, const char *name, int priority)
   t->stack = (uint8_t *) t + PGSIZE;
   t->priority = priority;
   t->magic = THREAD_MAGIC;
-
+  list_init(&t->child_processes_list);
   old_level = intr_disable ();
   list_push_back (&all_list, &t->allelem);
   intr_set_level (old_level);

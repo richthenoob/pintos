@@ -4,6 +4,10 @@
 #include <debug.h>
 #include <list.h>
 #include <stdint.h>
+#ifdef USERPROG
+#include <lib/kernel/hash.h>
+#include "synch.h"
+#endif
 
 /* States in a thread's life cycle. */
 enum thread_status
@@ -93,14 +97,20 @@ struct thread
     /* Shared between thread.c and synch.c. */
     struct list_elem elem;              /* List element. */
 
+    struct hash hash_table_of_file_nodes;  /* Hash table for file nodes. */
 #ifdef USERPROG
     /* Owned by userprog/process.c. */
     uint32_t *pagedir;                  /* Page directory. */
+    struct list child_processes_list;   /* List of processes this thread has
+                                           spawned using exec. */
 #endif
 
     /* Owned by thread.c. */
     unsigned magic;                     /* Detects stack overflow. */
-  };
+};
+
+struct hash process_hashtable;
+struct lock filesys_lock;
 
 /* If false (default), use round-robin scheduler.
    If true, use multi-level feedback queue scheduler.
@@ -138,5 +148,7 @@ int thread_get_nice (void);
 void thread_set_nice (int);
 int thread_get_recent_cpu (void);
 int thread_get_load_avg (void);
+
+int available_fd_value(struct thread *t);
 
 #endif /* threads/thread.h */

@@ -1,6 +1,7 @@
 #ifndef FILESYS_FILE_H
 #define FILESYS_FILE_H
 
+#include <lib/kernel/list.h>
 #include "filesys/off_t.h"
 
 struct inode;
@@ -26,4 +27,8 @@ void file_seek (struct file *, off_t);
 off_t file_tell (struct file *);
 off_t file_length (struct file *);
 
+struct executable {
+  struct list_elem list_elem;
+  struct file *file;
+};
 #endif /* filesys/file.h */

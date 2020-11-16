@@ -3,11 +3,11 @@
 #include <inttypes.h>
 #include <round.h>
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 #include "userprog/gdt.h"
 #include "userprog/pagedir.h"
 #include "userprog/tss.h"
+#include "userprog/syscall.h"
 #include "filesys/directory.h"
 #include "filesys/file.h"
 #include "filesys/filesys.h"
@@ -17,9 +17,33 @@
 #include "threads/palloc.h"
 #include "threads/thread.h"
 #include "threads/vaddr.h"
+#include "threads/malloc.h"
 
 static thread_func start_process NO_RETURN;
 static bool load (const char *cmdline, void (**eip) (void), void **esp);
+
+unsigned process_hash (const struct hash_elem *p_, void *aux UNUSED) {
+  struct process *p = hash_entry (p_, struct process, hash_elem);
+  return hash_int(p->pid);
+}
+
+bool process_less(const struct hash_elem *a_, const struct hash_elem *b_,
+                  void *aux UNUSED) {
+  struct process *a = hash_entry (a_, struct process, hash_elem);
+  struct process *b = hash_entry (b_, struct process, hash_elem);
+  return a->pid < b->pid;
+}
+
+/* Locates a process in process_hashtable given a pid. Must hold process_lock
+  before calling this function. */
+struct process *process_lookup (const int pid) {
+  ASSERT (lock_held_by_current_thread (&process_lock))
+  struct process p;
+  struct hash_elem *e;
+  p.pid = pid;
+  e = hash_find (&process_hashtable, &p.hash_elem);
+  return e != NULL ? hash_entry (e, struct process, hash_elem) : NULL;
+}
 
 /* Starts a new thread running a user program loaded from
    FILENAME.  The new thread may be scheduled (and may even exit)
@@ -36,13 +60,53 @@ process_execute (const char *file_name)
   fn_copy = palloc_get_page (0);
   if (fn_copy == NULL)
     return TID_ERROR;
-  strlcpy (fn_copy, file_name, PGSIZE);
+
+  struct process *p = malloc (sizeof(struct process));
+  if (p == NULL) {
+      return TID_ERROR;
+  }
+
+  sema_init(&p->exec_sema, 0);
+  sema_init(&p->wait_sema, 0);
+  p->pid = (pid_t) TID_ERROR;
+  p->exit_code = DEFAULT_ERROR_CODE;
+  p->exec_file = NULL;
+  p->parent_tid = DEFAULT_PARENT_TID;
+  p->waited_on = false;
+
+  lock_acquire(&process_lock);
+  hash_insert (&process_hashtable, &p->hash_elem);
+  lock_release(&process_lock);
+
+  memcpy (fn_copy, &p, sizeof(struct process **));
+  strlcpy (fn_copy + sizeof(struct process **), file_name, PGSIZE - sizeof(struct process **));
 
   /* Create a new thread to execute FILE_NAME. */
   tid = thread_create (file_name, PRI_DEFAULT, start_process, fn_copy);
-  if (tid == TID_ERROR)
-    palloc_free_page (fn_copy); 
+  if (tid == TID_ERROR) {
+      palloc_free_page (fn_copy);
+      lock_acquire(&process_lock);
+      hash_delete(&process_hashtable, &p->hash_elem);
+      free(p);
+      lock_release(&process_lock);
+      return TID_ERROR;
+  }
+
+  sema_down (&p->exec_sema);
+
+  if (p->exit_code == ERROR_CODE_FAILED_LOAD) {
+    palloc_free_page (fn_copy);
+    lock_acquire(&process_lock);
+    hash_delete(&process_hashtable, &p->hash_elem);
+    free(p);
+    lock_release(&process_lock);
+    return -1;
+  }
+
+  list_push_back (&thread_current()->child_processes_list, &p->list_elem);
+  p->parent_tid = thread_current()->tid;
   return tid;
+
 }
 
 /* A thread function that loads a user process and starts it
@@ -50,9 +114,30 @@ process_execute (const char *file_name)
 static void
 start_process (void *file_name_)
 {
-  char *file_name = file_name_;
+  char *argv[50]; // TODO: replace with max number of args.
+  void *argv_addr[50];
+  char *file_name = file_name_ + sizeof(struct process **);
+  struct process *p = *(struct process **) file_name_;
   struct intr_frame if_;
   bool success;
+
+/* Set pid of this process's to its tid. */
+  lock_acquire(&process_lock);
+  hash_delete(&process_hashtable, &p->hash_elem);
+  p->pid = thread_current() -> tid;
+  hash_insert(&process_hashtable, &p->hash_elem);
+  lock_release(&process_lock);
+
+  /*  Tokenize file_name and place into array argv */
+  char *token, *save_ptr;
+  int argc = 0;
+  for (token = strtok_r(file_name, " ", &save_ptr);
+       token != NULL;
+       token = strtok_r(NULL, " ", &save_ptr))
+    {
+      argv[argc] = token;
+      argc++;
+    }
 
   /* Initialize interrupt frame and load executable. */
   memset (&if_, 0, sizeof if_);
@@ -61,10 +146,50 @@ start_process (void *file_name_)
   if_.eflags = FLAG_IF | FLAG_MBS;
   success = load (file_name, &if_.eip, &if_.esp);
 
+  if (!success)
+    {
+      process_exit_with_code (-1);
+      NOT_REACHED()
+    }
+
+  /* Set up stack. */
+
+  /* Push arguments in reverse order, storing each address into argv_addr. */
+  for (int i = argc - 1; i >= 0; --i)
+    {
+      if_.esp -= strlen(argv[i]) + 1;
+      strlcpy(if_.esp, argv[i], PGSIZE);
+      argv_addr[i] = if_.esp;
+    }
+
+  /* Push null pointer sentinel. */
+  if_.esp -= sizeof(void *);
+  memset(if_.esp, 0, sizeof(void *));
+
+  /* Push pointers to arguments. */
+  for (int j = argc - 1; j >= 0; --j)
+    {
+      if_.esp -= sizeof(void *);
+      memcpy(if_.esp, &argv_addr[j], sizeof(void *));
+    }
+
+  /* Set up argv */
+  void *old_esp = if_.esp;
+  if_.esp -= sizeof(void *);
+  memcpy(if_.esp, &old_esp, sizeof(void *));
+
+  /* Set up argc */
+  if_.esp -= sizeof(int);
+  memcpy(if_.esp, &argc, sizeof(int));
+
+  /* Fake return address */
+  if_.esp -= sizeof(void *);
+  memset(if_.esp, 0, sizeof(void *));
+
   /* If load failed, quit. */
-  palloc_free_page (file_name);
-  if (!success) 
-    thread_exit ();
+  palloc_free_page (file_name_);
+
+  sema_up(&p->exec_sema);
 
   /* Start the user process by simulating a return from an
      interrupt, implemented by intr_exit (in
@@ -86,9 +211,84 @@ start_process (void *file_name_)
  * This function will be implemented in task 2.
  * For now, it does nothing. */
 int
-process_wait (tid_t child_tid UNUSED) 
+process_wait (tid_t child_tid)
 {
-  return -1;
+  lock_acquire(&process_lock);
+  struct process *p = process_lookup (child_tid);
+  lock_release(&process_lock);
+  if (p == NULL || p->parent_tid != thread_current()->tid || p->waited_on) {
+    return -1;
+  }
+
+  /* Child process exists in process_hashtable, so wait on it. */
+  p->waited_on = true;
+
+  /* Wait for child if it hasn't yet exited. */
+  if (p->exit_code == DEFAULT_ERROR_CODE) {
+    sema_down(&p->wait_sema);
+  }
+  int exit_code = p->exit_code;
+
+  /* Child has successfully exited, so remove from process hashtable and
+     child_processes_list then free memory. */
+  lock_acquire(&process_lock);
+  struct hash_elem *returned_hash = hash_delete (&process_hashtable, &p->hash_elem);
+  ASSERT (returned_hash != NULL);
+  list_remove (&p->list_elem);
+  free(p);
+  lock_release (&process_lock);
+
+  return exit_code;
+}
+
+/* Release memory associated with child processes it has created. Must hold
+   process_lock before calling this function. */
+static void free_all_children_process (void) {
+  ASSERT (lock_held_by_current_thread (&process_lock));
+  struct list_elem *e;
+  struct process *p;
+  struct hash_elem *returned_hash;
+  struct list *child_list = &thread_current()->child_processes_list;
+  for (e = list_begin (child_list); e != list_end (child_list);)
+    {
+      p = list_entry (e, struct process, list_elem);
+      returned_hash = hash_delete (&process_hashtable, &p->hash_elem);
+      ASSERT (returned_hash != NULL);
+      e = list_next (e);
+      free(p);
+    }
+}
+
+void
+process_exit_with_code(int exit_code) {
+  /* Print exit message. */
+  char *name = thread_name ();
+  char *token, *save_ptr;
+  token = strtok_r (name, " ", &save_ptr);
+  printf ("%s: exit(%d)\n", token, exit_code);
+
+  /* Free all of its children processes in process hashtable. */
+  lock_acquire(&process_lock);
+  free_all_children_process();
+
+  /* Signal to parent process that this thread is done. */
+  struct process *p = process_lookup (thread_current ()->tid);
+  ASSERT (p != NULL)
+  p->exit_code = exit_code;
+  sema_up (&p->wait_sema);
+  sema_up (&p->exec_sema);
+  lock_release (&process_lock);
+
+  if (p->exec_file != NULL)
+    {
+      file_close (p->exec_file);
+    } else {
+    /* Failed to load in start_process. */
+    p->exit_code = ERROR_CODE_FAILED_LOAD;
+  }
+
+  hash_destroy (&thread_current ()->hash_table_of_file_nodes, free_file_node);
+  thread_exit ();
 }
 
 /* Free the current process's resources. */
@@ -309,10 +509,16 @@ load (const char *file_name, void (**eip) (void), void **esp)
   *eip = (void (*) (void)) ehdr.e_entry;
 
   success = true;
+  file_deny_write(file);
+
+  lock_acquire(&process_lock);
+  struct process *p = process_lookup(thread_current()->tid);
+  lock_release(&process_lock);
+  p->exec_file = file;
 
  done:
-  /* We arrive here whether the load is successful or not. */
-  file_close (file);
+  /* We arrive here whether the load is successful or not.*/
+
   return success;
 }
 
