@@ -45,7 +45,6 @@ static bool user_memory_access_string (void *user_ptr);
 
 static int next_fd_value (void);
 static struct file_node *file_node_lookup (int fd, struct thread *t);
-static void free_file_node (struct file_node *file_node);
 
 void
 syscall_init (void)
@@ -57,16 +56,18 @@ syscall_init (void)
 static void
 syscall_handler (struct intr_frame *f)
 {
-  /* Check that caller arguments are in user virtual memory space. */
-  if (!user_memory_access_is_valid (f->esp + 12))
+  /* Check that caller arguments are in user virtual memory space. Since
+     the maximum number of args is 3, we just need to check that the 3rd
+     argument is within user space. */
+  if (!user_memory_access_is_valid (f->esp + 3 * sizeof (void *)))
     {
-      syscall_exit (-1);
+      syscall_exit (DEFAULT_ERR_EXIT_CODE);
     }
 
   int syscall_no = *(int *) f->esp;
-  void *arg1 = f->esp + 4;
-  void *arg2 = f->esp + 8;
-  void *arg3 = f->esp + 12;
+  void *arg1 = f->esp + 1 * sizeof (void *);
+  void *arg2 = f->esp + 2 * sizeof (void *);
+  void *arg3 = f->esp + 3 * sizeof (void *);
   int return_value;
   if (syscall_no == 0)
     {
@@ -86,7 +87,7 @@ syscall_handler (struct intr_frame *f)
     }
   else
     {
-      syscall_exit (-1);
+      syscall_exit (DEFAULT_ERR_EXIT_CODE);
     }
 
   f->eax = return_value;
@@ -113,11 +114,10 @@ static int single_arg_syscall (int syscall_no, void *arg1)
         return syscall_tell (*(int *) arg1);
       case SYS_CLOSE:
         syscall_close (*(int *) arg1);
-      break;
+        return 0;
       default:
-        syscall_exit (-1);
+        syscall_exit (DEFAULT_ERR_EXIT_CODE);
     }
-  return 0;
 }
 
 static int double_arg_syscall (int syscall_no, void *arg1, void *arg2)
@@ -128,9 +128,10 @@ static int double_arg_syscall (int syscall_no, void *arg1, void *arg2)
         return syscall_create ((const char *) arg1, *(unsigned *) arg2);
       case SYS_SEEK:
         syscall_seek (*(int *) arg1, *(unsigned *) arg2);
-      break;
+        return 0;
+      default:
+        syscall_exit (DEFAULT_ERR_EXIT_CODE);
     }
-  return 0;
 }
 
 static int triple_arg_syscall (int syscall_no, void *arg1,
@@ -143,7 +144,7 @@ static int triple_arg_syscall (int syscall_no, void *arg1,
       case SYS_WRITE:
         return syscall_write (*(int *) arg1, arg2, *(unsigned *) arg3);
       default:
-        syscall_exit (-1);
+        syscall_exit (DEFAULT_ERR_EXIT_CODE);
     }
 }
 
@@ -161,10 +162,6 @@ static pid_t syscall_exec (const char *file)
   if (user_memory_access_is_valid (file_ptr)
       && user_memory_access_string (file_ptr))
     {
-      char *exec[strlen (file_ptr) + 1];
-      strlcpy ((char *) exec, file_ptr, strlen (file_ptr) + 1);
-      char *token, *save_ptr;
-      token = strtok_r ((char *) exec, " ", &save_ptr);
 // TODO: fix issue with testing file exists - refer to tests syn-read vs exec-missing
 //      lock_acquire (&filesys_lock);
 //      struct file *test_open = filesys_open (token);
@@ -193,7 +190,7 @@ static bool syscall_create (const char *file, unsigned initial_size)
   char *file_ptr = *(char **) file;
   if (!user_memory_access_is_valid (file_ptr) || strcmp (file_ptr, "") == 0)
     {
-      syscall_exit (-1);
+      syscall_exit (DEFAULT_ERR_EXIT_CODE);
     }
   if (strlen (file_ptr) > NAME_MAX)
     {
@@ -211,7 +208,7 @@ static bool syscall_remove (const char *file)
   char *file_ptr = *(char **) file;
   if (!user_memory_access_is_valid (file_ptr))
     {
-      syscall_exit (-1);
+      syscall_exit (DEFAULT_ERR_EXIT_CODE);
     }
   lock_acquire (&filesys_lock);
   bool success = filesys_remove (file);
@@ -224,14 +221,14 @@ static int syscall_open (const char *file)
   char *file_ptr = *(char **) file;
   if (!user_memory_access_is_valid (file_ptr))
     {
-      syscall_exit (-1);
+      syscall_exit (DEFAULT_ERR_EXIT_CODE);
     }
   lock_acquire (&filesys_lock);
   struct file *opened_file = filesys_open (file_ptr);
   lock_release (&filesys_lock);
   if (!opened_file)
     {
-      return -1;
+      return DEFAULT_ERR_EXIT_CODE;
     }
   struct file_node *node = malloc (sizeof (*node));
   node->file = opened_file;
@@ -250,7 +247,7 @@ static int syscall_filesize (int fd)
   if (file_node == NULL)
     {
       lock_release (&filesys_lock);
-      return -1;
+      return DEFAULT_ERR_EXIT_CODE;
     }
 
   int length = file_length (file_node->file);
@@ -267,16 +264,21 @@ static int syscall_read (int fd, void *buffer, unsigned length)
       || !user_memory_access_buffer (buffer_ptr, length))
     {
       lock_release (&filesys_lock);
-      syscall_exit (-1);
+      syscall_exit (DEFAULT_ERR_EXIT_CODE);
     }
-  if (fd == STDOUT_FILENO)
+  int read_length;
+  switch (fd)
     {
-      input_getc ();
-      lock_release (&filesys_lock);
-      return 1;
+      case STDIN_FILENO:
+        read_length = input_getc ();
+      break;
+      case STDOUT_FILENO:
+        process_exit_with_code (DEFAULT_ERR_EXIT_CODE);
+      NOT_REACHED()
+      default:
+        read_length = file_read (file_node->file, buffer_ptr, length);
     }
 
-  int read_length = file_read (file_node->file, buffer_ptr, length);
   lock_release (&filesys_lock);
   return read_length;
 }
@@ -287,10 +289,8 @@ static int syscall_write (int fd, const void *buffer, unsigned length)
   if (!user_memory_access_is_valid (buffer_ptr)
       || !user_memory_access_buffer (buffer_ptr, length))
     {
-      syscall_exit (-1);
+      syscall_exit (DEFAULT_ERR_EXIT_CODE);
     }
-
-//      void *user_ptr = pagedir_get_page (thread_current ()->pagedir, buffer_ptr);
 
   lock_acquire (&filesys_lock);
   int bytes_written;
@@ -314,28 +314,29 @@ static int syscall_write (int fd, const void *buffer, unsigned length)
 static void syscall_seek (int fd, unsigned position)
 {
   struct thread *current_thread = thread_current ();
-  lock_acquire(&filesys_lock);
+  lock_acquire (&filesys_lock);
   struct file_node *file_node = file_node_lookup (fd, current_thread);
   if (file_node == NULL)
     {
-      return;
+      lock_release (&filesys_lock);
+      process_exit_with_code (DEFAULT_ERR_EXIT_CODE);
     }
-  file_seek (file_node->file, position);
   lock_release (&filesys_lock);
+  file_seek (file_node->file, position);
 }
 
 static unsigned syscall_tell (int fd)
 {
   struct thread *current_thread = thread_current ();
-  lock_acquire(&filesys_lock);
+  lock_acquire (&filesys_lock);
   struct file_node *file_node = file_node_lookup (fd, current_thread);
   if (file_node == NULL)
     {
-      lock_release(&filesys_lock);
-      return -1;
+      process_exit_with_code(DEFAULT_ERR_EXIT_CODE);
+      NOT_REACHED()
     }
   unsigned next_byte_pos = file_tell (file_node->file);
-  lock_release(&filesys_lock);
+  lock_release (&filesys_lock);
   return next_byte_pos;
 }
 
@@ -350,7 +351,7 @@ static void syscall_close (int fd)
       return;
     }
   hash_delete (&current_thread->hash_table_of_file_nodes, &file_node->hash_elem);
-  free_file_node (file_node);
+  free_file_node (&file_node->hash_elem, NULL);
   lock_release(&filesys_lock);
 }
 
@@ -417,8 +418,18 @@ file_node_lookup (int fd, struct thread *t)
   return e != NULL ? hash_entry (e, struct file_node, hash_elem) : NULL;
 }
 
-static void
-free_file_node (struct file_node *file_node)
+void free_file_node (struct hash_elem *element, void *aux UNUSED) {
+  struct file_node *fn = hash_entry (element, struct file_node, hash_elem);
+  file_allow_write(fn->file);
+  hash_delete (&thread_current()->hash_table_of_file_nodes, element);
+  free(fn);
+}
+
+void get_first_word (const char *src, char *dest)
 {
-  free (file_node);
+  char tmp[strlen (src) + 1];
+  strlcpy (tmp, src, strlen (dest) + 1);
+  char *token, *save_ptr;
+  token = strtok_r (tmp, " ", &save_ptr);
+  strlcpy (dest, token, strlen(dest));
 }

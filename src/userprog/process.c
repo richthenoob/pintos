@@ -22,6 +22,18 @@
 static thread_func start_process NO_RETURN;
 static bool load (const char *cmdline, void (**eip) (void), void **esp);
 
+unsigned process_hash (const struct hash_elem *p_, void *aux UNUSED) {
+  struct process *p = hash_entry (p_, struct process, hash_elem);
+  return hash_int(p->pid);
+}
+
+bool process_less(const struct hash_elem *a_, const struct hash_elem *b_,
+                  void *aux UNUSED) {
+  struct process *a = hash_entry (a_, struct process, hash_elem);
+  struct process *b = hash_entry (b_, struct process, hash_elem);
+  return a->pid < b->pid;
+}
+
 /* Locates a process in process_hashtable given a pid. Must hold process_lock
   before calling this function. */
 struct process *process_lookup (const int pid) {
@@ -49,23 +61,24 @@ process_execute (const char *file_name)
   if (fn_copy == NULL)
     return TID_ERROR;
 
-  struct process *p = malloc (sizeof(struct process));
-  sema_init(&p->process_sema, 0);
-  p->pid = -1;
-  p->exit_code = -10;
-  p->parent_tid = -20;
-  p->waited_on = false;
   lock_acquire(&process_lock);
+  struct process *p = malloc (sizeof(struct process));
+  sema_init(&p->exec_sema, 0);
+  sema_init(&p->wait_sema, 0);
+  p->pid = (pid_t) TID_ERROR;
+  p->exit_code = DEFAULT_ERROR_CODE;
+  p->parent_tid = DEFAULT_PARENT_TID;
+  p->waited_on = false;
   hash_insert (&process_hashtable, &p->hash_elem);
   list_push_back (&thread_current()->child_processes_list, &p->list_elem);
   lock_release(&process_lock);
 
   memcpy (fn_copy, &p, sizeof(struct process **));
-  memcpy (fn_copy + sizeof(struct process **), file_name, PGSIZE - sizeof(struct process **));
+  strlcpy (fn_copy + sizeof(struct process **), file_name, PGSIZE - sizeof(struct process **));
 
   /* Create a new thread to execute FILE_NAME. */
   tid = thread_create (file_name, PRI_DEFAULT, start_process, fn_copy);
-  sema_down (&p->process_sema);
+  sema_down (&p->exec_sema);
   if (tid == TID_ERROR) {
     palloc_free_page (fn_copy);
     return -1;
@@ -104,7 +117,6 @@ start_process (void *file_name_)
   p->pid = thread_current() -> tid;
   hash_insert(&process_hashtable, &p->hash_elem);
   lock_release(&process_lock);
-  sema_up(&p->process_sema);
 
   /* Initialize interrupt frame and load executable. */
   memset (&if_, 0, sizeof if_);
@@ -152,6 +164,8 @@ start_process (void *file_name_)
   if (!success) 
     process_exit_with_code(-1);
 
+  sema_up(&p->exec_sema);
+
   /* Start the user process by simulating a return from an
      interrupt, implemented by intr_exit (in
      threads/intr-stubs.S).  Because intr_exit takes all of its
@@ -185,8 +199,8 @@ process_wait (tid_t child_tid)
   p->waited_on = true;
 
   /* Wait for child if it hasn't yet exited. */
-  if (p->exit_code == -10) {
-    sema_down(&p->process_sema);
+  if (p->exit_code == DEFAULT_ERROR_CODE) {
+    sema_down(&p->wait_sema);
   }
   int exit_code = p->exit_code;
 
@@ -220,20 +234,14 @@ static void free_all_children_process (void) {
     }
 }
 
-static void free_open_files (struct hash_elem *element, void *aux) {
-  struct file_node *fn = hash_entry (element, struct file_node, hash_elem);
-  file_allow_write(fn->file);
-  hash_delete (&thread_current()->hash_table_of_file_nodes, element);
-  free(fn);
-}
+
 
 void
 process_exit_with_code(int exit_code) {
   /* Print exit message. */
-  char *name = thread_name ();
-  char *token, *save_ptr;
-  token = strtok_r (name, " ", &save_ptr);
-  printf ("%s: exit(%d)\n", token, exit_code);
+  char first_word[NAME_MAX];
+  get_first_word (thread_current()->name, first_word);
+  printf ("%s: exit(%d)\n", first_word, exit_code);
 
   /* Free all of its children processes in process hashtable. */
   lock_acquire(&process_lock);
@@ -244,8 +252,8 @@ process_exit_with_code(int exit_code) {
   p->exit_code = exit_code;
   lock_release(&process_lock);
   file_allow_write (p->exec_file);
-  hash_destroy (&thread_current()->hash_table_of_file_nodes, free_open_files);
-  sema_up (&p->process_sema);
+  hash_destroy (&thread_current()->hash_table_of_file_nodes, free_file_node);
+  sema_up (&p->wait_sema);
 
   thread_exit ();
 }
