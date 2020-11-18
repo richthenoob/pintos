@@ -40,11 +40,12 @@ static unsigned syscall_tell (int fd);
 static void syscall_close (int fd);
 
 static bool user_memory_access_is_valid (void *user_ptr);
-static bool user_memory_access_buffer (void *user_ptr, unsigned length);
-static bool user_memory_access_string (void *user_ptr);
+static bool
+user_memory_access_buffer_is_valid (void *user_ptr, unsigned length);
+static bool user_memory_access_string_is_valid (void *user_ptr);
 
 static int next_fd_value (void);
-static struct file_node *file_node_lookup (int fd, struct thread *t);
+static struct file_node *file_node_lookup (int fd);
 
 void
 syscall_init (void)
@@ -114,7 +115,7 @@ static int single_arg_syscall (int syscall_no, void *arg1)
         return syscall_tell (*(int *) arg1);
       case SYS_CLOSE:
         syscall_close (*(int *) arg1);
-        return 0;
+      return 0;
       default:
         syscall_exit (DEFAULT_ERR_EXIT_CODE);
     }
@@ -128,7 +129,7 @@ static int double_arg_syscall (int syscall_no, void *arg1, void *arg2)
         return syscall_create ((const char *) arg1, *(unsigned *) arg2);
       case SYS_SEEK:
         syscall_seek (*(int *) arg1, *(unsigned *) arg2);
-        return 0;
+      return 0;
       default:
         syscall_exit (DEFAULT_ERR_EXIT_CODE);
     }
@@ -160,18 +161,8 @@ static pid_t syscall_exec (const char *file)
   char *file_ptr = *(char **) file;
 
   if (user_memory_access_is_valid (file_ptr)
-      && user_memory_access_string (file_ptr))
+      && user_memory_access_string_is_valid (file_ptr))
     {
-// TODO: fix issue with testing file exists - refer to tests syn-read vs exec-missing
-//      lock_acquire (&filesys_lock);
-//      struct file *test_open = filesys_open (token);
-//      if (!test_open)
-//        {
-//          lock_release (&filesys_lock);
-//          return TID_ERROR;
-//        }
-//      file_close (test_open);
-//      lock_release (&filesys_lock);
       return process_execute (file_ptr);
     }
   else
@@ -188,7 +179,8 @@ static int syscall_wait (pid_t pid)
 static bool syscall_create (const char *file, unsigned initial_size)
 {
   char *file_ptr = *(char **) file;
-  if (!user_memory_access_is_valid (file_ptr) || strcmp (file_ptr, "") == 0)
+  if (!user_memory_access_is_valid (file_ptr) || strcmp (file_ptr, "") == 0
+      || !user_memory_access_buffer_is_valid (file_ptr, NAME_MAX))
     {
       syscall_exit (DEFAULT_ERR_EXIT_CODE);
     }
@@ -205,7 +197,8 @@ static bool syscall_create (const char *file, unsigned initial_size)
 static bool syscall_remove (const char *file)
 {
   char *file_ptr = *(char **) file;
-  if (!user_memory_access_is_valid (file_ptr))
+  if (!user_memory_access_is_valid (file_ptr)
+      || !user_memory_access_buffer_is_valid (file_ptr, NAME_MAX))
     {
       syscall_exit (DEFAULT_ERR_EXIT_CODE);
     }
@@ -218,7 +211,8 @@ static bool syscall_remove (const char *file)
 static int syscall_open (const char *file)
 {
   char *file_ptr = *(char **) file;
-  if (!user_memory_access_is_valid (file_ptr))
+  if (!user_memory_access_is_valid (file_ptr)
+      || !user_memory_access_buffer_is_valid (file_ptr, NAME_MAX))
     {
       syscall_exit (DEFAULT_ERR_EXIT_CODE);
     }
@@ -229,26 +223,18 @@ static int syscall_open (const char *file)
     {
       return DEFAULT_ERR_EXIT_CODE;
     }
-  struct file_node *node = malloc (sizeof (*node));
-  node->file = opened_file;
 
-  struct thread *current_thread = thread_current ();
-  node->fd = next_fd_value ();
-  hash_insert (&current_thread->hash_table_of_file_nodes, &node->hash_elem);
-  return node->fd;
+  return add_to_hash_table_of_file_nodes (opened_file);
 }
 
 static int syscall_filesize (int fd)
 {
-  struct thread *current_thread = thread_current ();
-  lock_acquire (&filesys_lock);
-  struct file_node *file_node = file_node_lookup (fd, current_thread);
+  struct file_node *file_node = file_node_lookup (fd);
   if (file_node == NULL)
     {
-      lock_release (&filesys_lock);
       return DEFAULT_ERR_EXIT_CODE;
     }
-
+  lock_acquire (&filesys_lock);
   int length = file_length (file_node->file);
   lock_release (&filesys_lock);
   return length;
@@ -257,12 +243,10 @@ static int syscall_filesize (int fd)
 static int syscall_read (int fd, void *buffer, unsigned length)
 {
   char *buffer_ptr = *(char **) (buffer);
-  lock_acquire (&filesys_lock);
-  struct file_node *file_node = file_node_lookup (fd, thread_current ());
+  struct file_node *file_node = file_node_lookup (fd);
   if (!user_memory_access_is_valid (buffer_ptr) || file_node == NULL
-      || !user_memory_access_buffer (buffer_ptr, length))
+      || !user_memory_access_buffer_is_valid (buffer_ptr, length))
     {
-      lock_release (&filesys_lock);
       syscall_exit (DEFAULT_ERR_EXIT_CODE);
     }
   int read_length;
@@ -275,10 +259,11 @@ static int syscall_read (int fd, void *buffer, unsigned length)
         process_exit_with_code (DEFAULT_ERR_EXIT_CODE);
       NOT_REACHED()
       default:
-        read_length = file_read (file_node->file, buffer_ptr, length);
+        lock_acquire (&filesys_lock);
+      read_length = file_read (file_node->file, buffer_ptr, length);
+      lock_release (&filesys_lock);
     }
 
-  lock_release (&filesys_lock);
   return read_length;
 }
 
@@ -286,7 +271,7 @@ static int syscall_write (int fd, const void *buffer, unsigned length)
 {
   char *buffer_ptr = *(char **) (buffer);
   if (!user_memory_access_is_valid (buffer_ptr)
-      || !user_memory_access_buffer (buffer_ptr, length))
+      || !user_memory_access_buffer_is_valid (buffer_ptr, length))
     {
       syscall_exit (DEFAULT_ERR_EXIT_CODE);
     }
@@ -298,9 +283,10 @@ static int syscall_write (int fd, const void *buffer, unsigned length)
       putbuf (buffer_ptr, length);
       bytes_written = length;
     }
-  else if (fd > STDOUT_FILENO && file_node_lookup (fd, thread_current ()) != NULL)
+  else if (fd > STDOUT_FILENO
+           && file_node_lookup (fd) != NULL)
     {
-      bytes_written = file_write (file_node_lookup (fd, thread_current ())->file, buffer_ptr, length);
+      bytes_written = file_write (file_node_lookup (fd)->file, buffer_ptr, length);
     }
   else
     {
@@ -312,28 +298,25 @@ static int syscall_write (int fd, const void *buffer, unsigned length)
 
 static void syscall_seek (int fd, unsigned position)
 {
-  struct thread *current_thread = thread_current ();
-  lock_acquire (&filesys_lock);
-  struct file_node *file_node = file_node_lookup (fd, current_thread);
+  struct file_node *file_node = file_node_lookup (fd);
   if (file_node == NULL)
     {
-      lock_release (&filesys_lock);
       process_exit_with_code (DEFAULT_ERR_EXIT_CODE);
     }
-  lock_release (&filesys_lock);
+  lock_acquire (&filesys_lock);
   file_seek (file_node->file, position);
+  lock_release (&filesys_lock);
 }
 
 static unsigned syscall_tell (int fd)
 {
-  struct thread *current_thread = thread_current ();
-  lock_acquire (&filesys_lock);
-  struct file_node *file_node = file_node_lookup (fd, current_thread);
+  struct file_node *file_node = file_node_lookup (fd);
   if (file_node == NULL)
     {
-      process_exit_with_code(DEFAULT_ERR_EXIT_CODE);
+      process_exit_with_code (DEFAULT_ERR_EXIT_CODE);
       NOT_REACHED()
     }
+  lock_acquire (&filesys_lock);
   unsigned next_byte_pos = file_tell (file_node->file);
   lock_release (&filesys_lock);
   return next_byte_pos;
@@ -341,16 +324,13 @@ static unsigned syscall_tell (int fd)
 
 static void syscall_close (int fd)
 {
-  struct thread *current_thread = thread_current ();
-  lock_acquire(&filesys_lock);
-  struct file_node *file_node = file_node_lookup (fd, current_thread);
-  if (file_node == NULL)
+  struct file_node *file_node = file_node_lookup (fd);
+  if (file_node != NULL)
     {
-      lock_release(&filesys_lock);
-      return;
+      lock_acquire (&filesys_lock);
+      free_file_node (&file_node->hash_elem, NULL);
+      lock_release (&filesys_lock);
     }
-  free_file_node (&file_node->hash_elem, NULL);
-  lock_release(&filesys_lock);
 }
 
 /* ---------------- HELPER FUNCTIONS ---------------- */
@@ -364,57 +344,69 @@ user_memory_access_is_valid (void *user_ptr)
 }
 
 static bool
-user_memory_access_buffer (void *user_ptr, unsigned length)
+user_memory_access_buffer_is_valid (void *user_ptr, unsigned length)
 {
-  return is_user_vaddr (user_ptr + length);
+  bool success = user_memory_access_is_valid (user_ptr + length);
+  while (success && length > PGSIZE)
+    {
+      length -= PGSIZE;
+      success = pagedir_get_page (thread_current ()->pagedir, user_ptr) != NULL;
+    }
+  return success;
 }
 
+/* Check string to ensure that it is of length smaller than or equals
+   to PGSIZE. */
 static bool
-user_memory_access_string (void *user_ptr)
+user_memory_access_string_is_valid (void *user_ptr)
 {
-  unsigned difference = PHYS_BASE - user_ptr + 1;
-  return strnlen (user_ptr, difference) < difference;
+  return strnlen (user_ptr, PGSIZE) < PGSIZE + 1;
 }
 
+/* Returns next file descriptor value for a specific thread. No synchronization
+   needed since a thread only accesses its own hash table. */
 static int
 next_fd_value (void)
 {
-  static tid_t next_fd = 2;
-  tid_t tid;
-  tid = next_fd++;
-  return tid;
+  return hash_size (&thread_current ()->hash_table_of_file_nodes)
+         + STDOUT_FILENO + 1;
 }
 
-unsigned
-file_node_hash (const struct hash_elem *p_, void *aux UNUSED)
-{
-  const struct file_node *p = hash_entry (p_, struct file_node, hash_elem);
-  return hash_int (p->fd);
-}
-
-bool
-file_node_less (const struct hash_elem *a_,
-                const struct hash_elem *b_,
-                void *aux UNUSED)
-{
-  const struct file_node *a = hash_entry (a_, struct file_node, hash_elem);
-  const struct file_node *b = hash_entry (b_, struct file_node, hash_elem);
-  return a->fd < b->fd;
-}
-
+/* Find a file node of the current thread's hash_table_of_file_nodes given a
+   file descriptor, fd. No synchronization needed since a thread only
+   accesses its own hash table. */
 static struct file_node *
-file_node_lookup (int fd, struct thread *t)
+file_node_lookup (int fd)
 {
-  struct file_node file_node;
+  struct file_node fn;
   struct hash_elem *e;
-  file_node.fd = fd;
-  e = hash_find (&t->hash_table_of_file_nodes, &file_node.hash_elem);
+  fn.fd = fd;
+  e = hash_find (&thread_current ()->hash_table_of_file_nodes, &fn.hash_elem);
   return e != NULL ? hash_entry (e, struct file_node, hash_elem) : NULL;
 }
 
-void free_file_node (struct hash_elem *element, void *aux UNUSED) {
-  struct file_node *fn = hash_entry (element, struct file_node, hash_elem);
+/* Add to current thread's hash_table_of_file_nodes. No synchronization needed. */
+int add_to_hash_table_of_file_nodes (struct file *opened_file)
+{
+  struct file_node *node = malloc (sizeof (*node));
+  if (node == NULL)
+    {
+      process_exit_with_code (DEFAULT_ERR_EXIT_CODE);
+    }
+  node->file = opened_file;
+  node->fd = next_fd_value ();
+  hash_insert (&(thread_current ()->hash_table_of_file_nodes), &node->hash_elem);
+  return node->fd;
+}
+
+/* Close file opened by this file_node and frees the malloc-ed struct. */
+void free_file_node (struct hash_elem *element, void *aux UNUSED)
+{
+  ASSERT (lock_held_by_current_thread (&filesys_lock));
+  struct file_node *fn = hash_entry (element,
+                                     struct file_node,
+                                     hash_elem);
   file_close (fn->file);
-  hash_delete (&thread_current()->hash_table_of_file_nodes, element);
-  free(fn);
+  hash_delete (&thread_current ()->hash_table_of_file_nodes, element);
+  free (fn);
 }

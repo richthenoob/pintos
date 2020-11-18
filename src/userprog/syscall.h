@@ -1,10 +1,10 @@
 #ifndef USERPROG_SYSCALL_H
 #define USERPROG_SYSCALL_H
 
-#define DEFAULT_ERR_EXIT_CODE -1
 #include <lib/kernel/hash.h>
 #include <debug.h>
 
+#define DEFAULT_ERR_EXIT_CODE -1
 void syscall_init (void);
 
 struct file_node {
@@ -13,11 +13,7 @@ struct file_node {
   struct file *file;
 };
 
-unsigned
-file_node_hash(const struct hash_elem *p_, void *aux UNUSED);
-bool
-file_node_less(const struct hash_elem *a_, const struct hash_elem *b_, void *aux UNUSED);
-
+int add_to_hash_table_of_file_nodes (struct file *opened_file);
 void free_file_node (struct hash_elem *element, void *aux);
 
 #endif /* userprog/syscall.h */

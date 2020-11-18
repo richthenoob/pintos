@@ -6,9 +6,10 @@
 #include "lib/user/syscall.h"
 #include "threads/synch.h"
 
-#define ERROR_CODE_FAILED_LOAD (-11)
-#define DEFAULT_ERROR_CODE (-10)
+#define EXIT_CODE_FAILED_LOAD (-11)
+#define DEFAULT_EXIT_CODE (-10)
 #define DEFAULT_PARENT_TID (-20)
+#define MAX_NUMBER_OF_ARGS (64)
 
 struct process {
   struct semaphore exec_sema;
@@ -28,9 +29,5 @@ void process_exit (void);
 void process_activate (void);
 void process_exit_with_code(int exit_code);
 
-struct lock process_lock;
 struct process *process_lookup (const int pid);
-unsigned process_hash (const struct hash_elem *p_, void *aux UNUSED);
-bool process_less(const struct hash_elem *a_, const struct hash_elem *b_,
-                  void *aux UNUSED);
 #endif /* userprog/process.h */

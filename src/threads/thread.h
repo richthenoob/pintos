@@ -10,13 +10,12 @@
 #endif
 
 /* States in a thread's life cycle. */
-enum thread_status
-  {
-    THREAD_RUNNING,     /* Running thread. */
-    THREAD_READY,       /* Not running but ready to run. */
-    THREAD_BLOCKED,     /* Waiting for an event to trigger. */
-    THREAD_DYING        /* About to be destroyed. */
-  };
+enum thread_status {
+  THREAD_RUNNING,     /* Running thread. */
+  THREAD_READY,       /* Not running but ready to run. */
+  THREAD_BLOCKED,     /* Waiting for an event to trigger. */
+  THREAD_DYING        /* About to be destroyed. */
+};
 
 /* Thread identifier type.
    You can redefine this to whatever type you like. */
@@ -84,33 +83,33 @@ typedef int tid_t;
    only because they are mutually exclusive: only a thread in the
    ready state is on the run queue, whereas only a thread in the
    blocked state is on a semaphore wait list. */
-struct thread
-  {
-    /* Owned by thread.c. */
-    tid_t tid;                          /* Thread identifier. */
-    enum thread_status status;          /* Thread state. */
-    char name[16];                      /* Name (for debugging purposes). */
-    uint8_t *stack;                     /* Saved stack pointer. */
-    int priority;                       /* Priority. */
-    struct list_elem allelem;           /* List element for all threads list. */
+struct thread {
+  /* Owned by thread.c. */
+  tid_t tid;                          /* Thread identifier. */
+  enum thread_status status;          /* Thread state. */
+  char name[16];                      /* Name (for debugging purposes). */
+  uint8_t *stack;                     /* Saved stack pointer. */
+  int priority;                       /* Priority. */
+  struct list_elem allelem;           /* List element for all threads list. */
 
-    /* Shared between thread.c and synch.c. */
-    struct list_elem elem;              /* List element. */
+  /* Shared between thread.c and synch.c. */
+  struct list_elem elem;              /* List element. */
 
-    struct hash hash_table_of_file_nodes;  /* Hash table for file nodes. */
+  struct hash hash_table_of_file_nodes;  /* Hash table for file nodes. */
 #ifdef USERPROG
-    /* Owned by userprog/process.c. */
-    uint32_t *pagedir;                  /* Page directory. */
-    struct list child_processes_list;   /* List of processes this thread has
+  /* Owned by userprog/process.c. */
+  uint32_t *pagedir;                  /* Page directory. */
+  struct list child_processes_list;   /* List of processes this thread has
                                            spawned using exec. */
 #endif
 
-    /* Owned by thread.c. */
-    unsigned magic;                     /* Detects stack overflow. */
+  /* Owned by thread.c. */
+  unsigned magic;                     /* Detects stack overflow. */
 };
 
-struct hash process_hashtable;
-struct lock filesys_lock;
+struct hash process_hashtable;          /* Hashtable to store process structs. */
+struct lock filesys_lock;               /* Lock used over the entire filesystem. */
+struct lock process_lock;               /* Lock used before accessing process_hashtable.*/
 
 /* If false (default), use round-robin scheduler.
    If true, use multi-level feedback queue scheduler.
@@ -119,7 +118,7 @@ extern bool thread_mlfqs;
 
 void thread_init (void);
 void thread_start (void);
-size_t threads_ready(void);
+size_t threads_ready (void);
 
 void thread_tick (void);
 void thread_print_stats (void);
@@ -148,7 +147,5 @@ int thread_get_nice (void);
 void thread_set_nice (int);
 int thread_get_recent_cpu (void);
 int thread_get_load_avg (void);
-
-int available_fd_value(struct thread *t);
 
 #endif /* threads/thread.h */
