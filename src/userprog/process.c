@@ -70,6 +70,10 @@ process_execute (const char *file_name)
   hash_insert (&process_hashtable, &p->hash_elem);
   lock_release (&process_lock);
 
+  /* We need to pass the pointer to the process struct from the current thread
+     (parent thread) to the child thread. So reserve a space of 4 bytes at the
+     top of the page "fn_copy" to store this information. Copy the rest of
+     the file name and its arguments to the rest of the page. */
   memcpy (fn_copy, &p, sizeof (struct process **));
   strlcpy (
       fn_copy + sizeof (struct process **), file_name,
@@ -116,6 +120,9 @@ start_process (void *file_name_)
 {
   char *argv[MAX_NUMBER_OF_ARGS];
   void *argv_addr[MAX_NUMBER_OF_ARGS];
+  /* Since file_name_ is a pointer to a page we passed in from the parent
+     process, we need to decipher a pointer to the process passed in and the
+     file name + arguments properly. Refer to process_execute for more info. */
   char *file_name = file_name_ + sizeof (struct process **);
   struct process *p = *(struct process **) file_name_;
   struct intr_frame if_;
@@ -153,12 +160,20 @@ start_process (void *file_name_)
       NOT_REACHED()
     }
 
-  /* Set up stack. */
+  /* Determine the longest possible string size we can accommodate into our
+     stack based on how many arguments have been tokenized already, and
+     how much more space we need to store the rest of the stack. Since this
+     is floor division, we can be sure that arg_max will never overflow the
+     stack. */
+  long arg_max = (PGSIZE - (4 * sizeof(void *))    /* Reserve space for return address, argc, argv and null pointer sentinel */
+                         - (argc * sizeof(void *)) /* Reserve space for pointers to arguments. */
+                 ) / argc;
+
   /* Push arguments in reverse order, storing each address into argv_addr. */
   for (int i = argc - 1; i >= 0; --i)
     {
       if_.esp -= strlen (argv[i]) + 1;
-      strlcpy (if_.esp, argv[i], PGSIZE);
+      strlcpy (if_.esp, argv[i], arg_max);
       argv_addr[i] = if_.esp;
     }
 

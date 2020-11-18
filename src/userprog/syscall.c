@@ -355,11 +355,12 @@ user_memory_access_buffer_is_valid (void *user_ptr, unsigned length)
   return success;
 }
 
+/* Check string to ensure that it is of length smaller than or equals
+   to PGSIZE. */
 static bool
 user_memory_access_string_is_valid (void *user_ptr)
 {
-  unsigned difference = PHYS_BASE - user_ptr + 1;
-  return strnlen (user_ptr, difference) < difference;
+  return strnlen (user_ptr, PGSIZE) < PGSIZE + 1;
 }
 
 /* Returns next file descriptor value for a specific thread. No synchronization
