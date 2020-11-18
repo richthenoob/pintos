@@ -178,7 +178,7 @@ static int syscall_wait (pid_t pid)
 static bool syscall_create (const char *file, unsigned initial_size)
 {
   char *file_ptr = *(char **) file;
-  if (!user_memory_access_is_valid (file_ptr) || strcmp (file_ptr, "") == 0)
+  if (!user_memory_access_is_valid (file_ptr) || strcmp (file_ptr, "") == 0 || !user_memory_access_buffer(file_ptr,NAME_MAX))
     {
       syscall_exit (DEFAULT_ERR_EXIT_CODE);
     }
@@ -195,7 +195,7 @@ static bool syscall_create (const char *file, unsigned initial_size)
 static bool syscall_remove (const char *file)
 {
   char *file_ptr = *(char **) file;
-  if (!user_memory_access_is_valid (file_ptr))
+  if (!user_memory_access_is_valid (file_ptr) || !user_memory_access_buffer(file_ptr,NAME_MAX))
     {
       syscall_exit (DEFAULT_ERR_EXIT_CODE);
     }
@@ -208,7 +208,7 @@ static bool syscall_remove (const char *file)
 static int syscall_open (const char *file)
 {
   char *file_ptr = *(char **) file;
-  if (!user_memory_access_is_valid (file_ptr))
+  if (!user_memory_access_is_valid (file_ptr) || !user_memory_access_buffer(file_ptr,NAME_MAX))
     {
       syscall_exit (DEFAULT_ERR_EXIT_CODE);
     }
