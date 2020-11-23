@@ -634,29 +634,27 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
       struct thread *t = thread_current ();
       uint8_t *kpage = pagedir_get_page (t->pagedir, upage);
 
-      if (kpage == NULL)
-        {
+      if (kpage == NULL){
 
-          /* Get a new page of memory. */
-          kpage = palloc_get_page (PAL_USER);
-          if (kpage == NULL)
-            {
-              return false;
-            }
-
-          /* Add the page to the process's address space. */
-          if (!install_page (upage, kpage, writable))
-            {
-              palloc_free_page (kpage);
-              return false;
-            }
+        /* Get a new page of memory. */
+        kpage = palloc_get_page (PAL_USER);
+        if (kpage == NULL){
+          return false;
         }
+
+        /* Add the page to the process's address space. */
+        if (!install_page (upage, kpage, writable))
+        {
+          palloc_free_page (kpage);
+          return false;
+        }
+      }
 
       /* Load data into the page. */
       if (file_read (file, kpage, page_read_bytes) != (int) page_read_bytes)
         {
           palloc_free_page (kpage);
-          return false;
+          return false; 
         }
       memset (kpage + page_read_bytes, 0, page_zero_bytes);
 

@@ -1,7 +1,7 @@
 # -*- makefile -*-
 
 tests/vm_TESTS = $(addprefix tests/vm/,pt-grow-stack pt-grow-pusha	\
-pt-grow-bad pt-big-stk-obj pt-bad-addr pt-bad-read pt-write-code	\
+pt-grow-bad pt-big-stk-obj pt-overflow-stack pt-bad-addr pt-bad-read pt-write-code	\
 pt-write-code2 pt-grow-stk-sc page-linear page-parallel page-merge-seq	\
 page-merge-par page-merge-stk page-merge-mm page-shuffle mmap-read	\
 mmap-close mmap-unmap mmap-overlap mmap-twice mmap-write mmap-exit	\
@@ -19,6 +19,8 @@ tests/main.c
 tests/vm/pt-grow-bad_SRC = tests/vm/pt-grow-bad.c tests/lib.c tests/main.c
 tests/vm/pt-big-stk-obj_SRC = tests/vm/pt-big-stk-obj.c tests/arc4.c	\
 tests/cksum.c tests/lib.c tests/main.c
+tests/vm/pt-overflow-stack_SRC = tests/vm/pt-overflow-stack.c tests/arc4.c	\
+tests/lib.c tests/main.c
 tests/vm/pt-bad-addr_SRC = tests/vm/pt-bad-addr.c tests/lib.c tests/main.c
 tests/vm/pt-bad-read_SRC = tests/vm/pt-bad-read.c tests/lib.c tests/main.c
 tests/vm/pt-write-code_SRC = tests/vm/pt-write-code.c tests/lib.c tests/main.c

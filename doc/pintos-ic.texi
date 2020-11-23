@@ -42,7 +42,7 @@
 
 @titlepage
 @title Pintos (Imperial College Edition)
-Version 2.3.5
+Version 2.3.6
 @author Originally by Ben Pfaff
 @end titlepage
 
