@@ -627,7 +627,8 @@ and the process's mappings must be unchanged.
 A call to @code{mmap} may fail if the file open as @var{fd} has a
 length of zero bytes.  It must fail if @var{addr} is not page-aligned
 or if the range of pages mapped overlaps any existing set of mapped
-pages, including the stack or pages mapped at executable load time.
+pages, including the space reserved for the stack 
+or pages mapped at executable load time.
 It must also fail if @var{addr} is 0, because some Pintos code assumes
 virtual page 0 is not mapped.  Finally, file descriptors 0 and 1,
 representing console input and output, are not mappable.
@@ -797,9 +798,10 @@ implementation with various user memory sizes.
 
 @item What should we do if the stack grows into a @code{mmap} file?
 
-You should treat this as a form of stack overflow and kill the user program.
-
-Note that the specification of @code{mmap} does not rule out creating mappings within the possible stack space,
-so you should not abort mappings created within this space.
+This should not be possible. 
+The specification of @code{mmap()} rules out creating mappings within the possible stack space,
+so you should abort any attempt to create a mapping within that space.
+The stack should also not be able to grow beyond it's reserved stack space, 
+thus ruling out the possibility of any such overlap.
 
 @end table

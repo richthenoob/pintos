@@ -99,11 +99,11 @@ kill (struct intr_frame *f)
       PANIC ("Kernel bug - unexpected interrupt in kernel"); 
 
     default:
-      /* Some other code segment?  Shouldn't happen.  Panic the
-         kernel. */
+      /* Some other code segment?  
+         Shouldn't happen.  Panic the kernel. */
       printf ("Interrupt %#04x (%s) in unknown segment %04x\n",
              f->vec_no, intr_name (f->vec_no), f->cs);
-      thread_exit ();
+      PANIC ("Kernel bug - this shouldn't be possible!");
     }
 }
 
