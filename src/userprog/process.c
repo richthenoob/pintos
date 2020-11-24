@@ -18,6 +18,7 @@
 #include "threads/thread.h"
 #include "threads/vaddr.h"
 #include "threads/malloc.h"
+#include "vm/frame.h"
 
 static thread_func start_process NO_RETURN;
 static bool load (const char *cmdline, void (**eip) (void), void **esp);
@@ -41,12 +42,13 @@ struct process *process_lookup (const int pid)
 tid_t
 process_execute (const char *file_name)
 {
-  char *fn_copy;
+  void *fn_copy;
   tid_t tid;
 
   /* Make a copy of FILE_NAME.
      Otherwise there's a race between the caller and load(). */
   fn_copy = palloc_get_page (0);
+//  fn_copy = falloc_get_frame(false);
   if (fn_copy == NULL)
     {
       return TID_ERROR;
@@ -637,7 +639,8 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
       if (kpage == NULL){
 
         /* Get a new page of memory. */
-        kpage = palloc_get_page (PAL_USER);
+        kpage = falloc_get_frame(false)->page_ptr;
+//        kpage = palloc_get_page (PAL_USER);
         if (kpage == NULL){
           return false;
         }
@@ -645,7 +648,8 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
         /* Add the page to the process's address space. */
         if (!install_page (upage, kpage, writable))
         {
-          palloc_free_page (kpage);
+          falloc_free_frame(frame_lookup (kpage));
+//          palloc_free_page (kpage);
           return false;
         }
       }
@@ -653,7 +657,8 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
       /* Load data into the page. */
       if (file_read (file, kpage, page_read_bytes) != (int) page_read_bytes)
         {
-          palloc_free_page (kpage);
+          falloc_free_frame(frame_lookup (kpage));
+//          palloc_free_page (kpage);
           return false; 
         }
       memset (kpage + page_read_bytes, 0, page_zero_bytes);
@@ -671,17 +676,19 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
 static bool
 setup_stack (void **esp)
 {
-  uint8_t *kpage;
+  struct frame *kpage;
   bool success = false;
 
-  kpage = palloc_get_page (PAL_USER | PAL_ZERO);
+//  kpage = palloc_get_page (PAL_USER | PAL_ZERO);
+  kpage = falloc_get_frame(true);
   if (kpage != NULL)
     {
-      success = install_page (((uint8_t *) PHYS_BASE) - PGSIZE, kpage, true);
+      success = install_page (((uint8_t *) PHYS_BASE) - PGSIZE, (uint8_t *) kpage->page_ptr, true);
       if (success)
         *esp = PHYS_BASE;
       else
-        palloc_free_page (kpage);
+        falloc_free_frame(kpage);
+//        palloc_free_page (kpage);
     }
   return success;
 }
