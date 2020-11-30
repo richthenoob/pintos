@@ -335,12 +335,13 @@ static void syscall_close (int fd)
 
 /* ---------------- HELPER FUNCTIONS ---------------- */
 
+/* Check that user pointer is not a kernal addr. and not null. If
+   the pointer points to an unmapped page, we handle it in exception.c */
 static bool
 user_memory_access_is_valid (void *user_ptr)
 {
   return !(user_ptr == NULL ||
-           !is_user_vaddr (user_ptr) ||
-           pagedir_get_page (thread_current ()->pagedir, user_ptr) == NULL);
+           !is_user_vaddr (user_ptr));
 }
 
 static bool

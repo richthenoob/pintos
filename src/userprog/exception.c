@@ -1,10 +1,13 @@
 #include "userprog/exception.h"
 #include <inttypes.h>
 #include <stdio.h>
+#include <threads/vaddr.h>
+#include <vm/page.h>
 #include "userprog/gdt.h"
 #include "threads/interrupt.h"
 #include "threads/thread.h"
 #include "userprog/process.h"
+#include "vm/page.h"
 
 /* Number of page faults processed. */
 static long long page_fault_cnt;
@@ -28,7 +31,7 @@ static void page_fault (struct intr_frame *);
    Refer to [IA32-v3a] section 5.15 "Exception and Interrupt
    Reference" for a description of each of these exceptions. */
 void
-exception_init (void) 
+exception_init (void)
 {
   /* These exceptions can be raised explicitly by a user program,
      e.g. via the INT, INT3, INTO, and BOUND instructions.  Thus,
@@ -60,14 +63,14 @@ exception_init (void)
 
 /* Prints exception statistics. */
 void
-exception_print_stats (void) 
+exception_print_stats (void)
 {
   printf ("Exception: %lld page faults\n", page_fault_cnt);
 }
 
 /* Handler for an exception (probably) caused by a user process. */
 static void
-kill (struct intr_frame *f) 
+kill (struct intr_frame *f)
 {
   /* This interrupt is one (probably) caused by a user process.
      For example, the process might have tried to access unmapped
@@ -76,33 +79,33 @@ kill (struct intr_frame *f)
      the kernel.  Real Unix-like operating systems pass most
      exceptions back to the process via signals, but we don't
      implement them. */
-     
+
   /* The interrupt frame's code segment value tells us where the
      exception originated. */
   switch (f->cs)
     {
-    case SEL_UCSEG:
-      /* User's code segment, so it's a user exception, as we
-         expected.  Kill the user process.  */
-      printf ("%s: dying due to interrupt %#04x (%s).\n",
-              thread_name (), f->vec_no, intr_name (f->vec_no));
-      intr_dump_frame (f);
-      process_exit_with_code (-1);
+      case SEL_UCSEG:
+        /* User's code segment, so it's a user exception, as we
+           expected.  Kill the user process.  */
+//      printf ("%s: dying due to interrupt %#04x (%s).\n",
+//              thread_name (), f->vec_no, intr_name (f->vec_no));
+//      intr_dump_frame (f);
+        process_exit_with_code (-1);
       NOT_REACHED()
 
-    case SEL_KCSEG:
-      /* Kernel's code segment, which indicates a kernel bug.
-         Kernel code shouldn't throw exceptions.  (Page faults
-         may cause kernel exceptions--but they shouldn't arrive
-         here.)  Panic the kernel to make the point.  */
-      intr_dump_frame (f);
-      PANIC ("Kernel bug - unexpected interrupt in kernel"); 
+      case SEL_KCSEG:
+        /* Kernel's code segment, which indicates a kernel bug.
+           Kernel code shouldn't throw exceptions.  (Page faults
+           may cause kernel exceptions--but they shouldn't arrive
+           here.)  Panic the kernel to make the point.  */
+        intr_dump_frame (f);
+      PANIC ("Kernel bug - unexpected interrupt in kernel");
 
-    default:
-      /* Some other code segment?  
-         Shouldn't happen.  Panic the kernel. */
-      printf ("Interrupt %#04x (%s) in unknown segment %04x\n",
-             f->vec_no, intr_name (f->vec_no), f->cs);
+      default:
+        /* Some other code segment?
+           Shouldn't happen.  Panic the kernel. */
+        printf ("Interrupt %#04x (%s) in unknown segment %04x\n",
+                f->vec_no, intr_name (f->vec_no), f->cs);
       PANIC ("Kernel bug - this shouldn't be possible!");
     }
 }
@@ -119,7 +122,7 @@ kill (struct intr_frame *f)
    description of "Interrupt 14--Page Fault Exception (#PF)" in
    [IA32-v3a] section 5.15 "Exception and Interrupt Reference". */
 static void
-page_fault (struct intr_frame *f) 
+page_fault (struct intr_frame *f)
 {
   bool not_present;  /* True: not-present page, false: writing r/o page. */
   bool write;        /* True: access was write, false: access was read. */
@@ -146,6 +149,49 @@ page_fault (struct intr_frame *f)
   not_present = (f->error_code & PF_P) == 0;
   write = (f->error_code & PF_W) != 0;
   user = (f->error_code & PF_U) != 0;
+
+  /* Page fault could be due to lazy-loading, so try to look for entry here. */
+  void *rounded_fault_page = pg_round_down (fault_addr);
+  if (not_present)
+    {
+      struct sup_pagetable_entry *entry = sup_pagetable_entry_lookup (rounded_fault_page);
+
+      /* Entry doesn't exist, so this is a legitimately bad user address.
+         Since this page fault can occur if the user calls a syscall with a bad
+         user address, we need to free the lock. */
+      if (!entry)
+        {
+          if (lock_held_by_current_thread (&filesys_lock))
+            {
+              lock_release (&filesys_lock);
+            }
+          f->cs = SEL_UCSEG;
+          kill (f);
+          NOT_REACHED()
+        }
+
+      /* Load the page from the file properly. */
+      bool success = false;
+      switch (entry->state)
+        {
+          case All_ZERO:
+            success = sup_pagetable_load_all_zero (entry);
+          break;
+          case FILE_SYSTEM:
+            success = sup_pagetable_load_file (entry);
+          break;
+          case SWAP_SLOT:
+            // TODO: implement swap
+            break;
+        }
+
+      if (!success)
+        {
+          kill (f);
+        }
+
+      return;
+    }
 
   /* To implement virtual memory, delete the rest of the function
      body, and replace it with code that brings in the page to

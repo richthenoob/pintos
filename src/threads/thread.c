@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <userprog/syscall.h>
+#include <vm/page.h>
 #include "threads/flags.h"
 #include "threads/interrupt.h"
 #include "threads/intr-stubs.h"
@@ -116,7 +117,7 @@ static unsigned frame_hash (const struct hash_elem *f_, void *aux UNUSED)
 
 static bool
 frame_less (const struct hash_elem *a_, const struct hash_elem *b_,
-              void *aux UNUSED)
+            void *aux UNUSED)
 {
   struct frame *a = hash_entry (a_, struct frame, hash_elem);
   struct frame *b = hash_entry (b_, struct frame, hash_elem);
@@ -275,6 +276,8 @@ thread_create (const char *name, int priority,
   /* Initialise the hash table for file descriptors. */
   hash_init (&(t->hash_table_of_file_nodes), file_node_hash, file_node_less, NULL);
 #endif
+  /* Initialise the supplementary page table. */
+  hash_init (&t->sup_pagetable, sup_page_hash, sup_page_cmp, NULL);
 
   /* Add to run queue. */
   thread_unblock (t);
