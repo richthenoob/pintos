@@ -103,6 +103,9 @@ struct thread {
   uint32_t *pagedir;                  /* Page directory. */
   struct list child_processes_list;   /* List of processes this thread has
                                            spawned using exec. */
+  uint32_t *user_esp;
+  uint8_t *start_writable_segment_addr;
+  uint8_t *end_writable_segment_addr;
 #endif
 
   /* Owned by thread.c. */

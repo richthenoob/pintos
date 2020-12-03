@@ -8,6 +8,8 @@
 #include "threads/thread.h"
 #include "userprog/process.h"
 #include "vm/page.h"
+#include "vm/frame.h"
+#include "userprog/syscall.h"
 
 /* Number of page faults processed. */
 static long long page_fault_cnt;
@@ -150,24 +152,33 @@ page_fault (struct intr_frame *f)
   write = (f->error_code & PF_W) != 0;
   user = (f->error_code & PF_U) != 0;
 
-  /* Page fault could be due to lazy-loading, so try to look for entry here. */
-  void *rounded_fault_page = pg_round_down (fault_addr);
+  /* Page fault detected. */
   if (not_present)
     {
+      void *rounded_fault_page = pg_round_down (fault_addr);
       struct sup_pagetable_entry *entry = sup_pagetable_entry_lookup (rounded_fault_page);
 
-      /* Entry doesn't exist, so this is a legitimately bad user address.
-         Since this page fault can occur if the user calls a syscall with a bad
-         user address, we need to free the lock. */
       if (!entry)
         {
-          if (lock_held_by_current_thread (&filesys_lock))
+          /* Attempt to determine if user pointer is a valid stack access or
+             a malicious pointer. */
+          void *user_esp = user ? f->esp : thread_current ()->user_esp;
+          int32_t offset = user_esp - fault_addr;
+
+          if (-MAX_STACK_SPACE_IN_BYTES < offset &&
+              offset <= MAX_OFFSET_FROM_STACK_PTR_IN_BYTES)
             {
-              lock_release (&filesys_lock);
+              /* Attempt to grow stack. */
+              struct frame *kframe = falloc_get_frame (true);
+              if (!install_page (rounded_fault_page, kframe->page_ptr, true))
+                {
+                  falloc_free_frame (kframe);
+                }
+              return;
             }
+
           f->cs = SEL_UCSEG;
           kill (f);
-          NOT_REACHED()
         }
 
       /* Load the page from the file properly. */
@@ -189,7 +200,6 @@ page_fault (struct intr_frame *f)
         {
           kill (f);
         }
-
       return;
     }
 
@@ -203,4 +213,3 @@ page_fault (struct intr_frame *f)
           user ? "user" : "kernel");
   kill (f);
 }
-

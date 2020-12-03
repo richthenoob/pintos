@@ -41,8 +41,9 @@ static void syscall_close (int fd);
 
 static bool user_memory_access_is_valid (void *user_ptr);
 static bool
-user_memory_access_buffer_is_valid (void *user_ptr, unsigned length);
+user_memory_access_buffer_is_valid (void *user_ptr, int32_t length);
 static bool user_memory_access_string_is_valid (void *user_ptr);
+static int get_user (const uint8_t *uaddr);
 
 static int next_fd_value (void);
 static struct file_node *file_node_lookup (int fd);
@@ -69,6 +70,8 @@ syscall_handler (struct intr_frame *f)
   void *arg1 = f->esp + 1 * sizeof (void *);
   void *arg2 = f->esp + 2 * sizeof (void *);
   void *arg3 = f->esp + 3 * sizeof (void *);
+
+  thread_current ()->user_esp = f->esp;
   int return_value;
   if (syscall_no == 0)
     {
@@ -91,6 +94,7 @@ syscall_handler (struct intr_frame *f)
       syscall_exit (DEFAULT_ERR_EXIT_CODE);
     }
 
+  thread_current ()->user_esp = (uint32_t *) -1;
   f->eax = return_value;
 }
 
@@ -160,8 +164,7 @@ static pid_t syscall_exec (const char *file)
 {
   char *file_ptr = *(char **) file;
 
-  if (user_memory_access_is_valid (file_ptr)
-      && user_memory_access_string_is_valid (file_ptr))
+  if (user_memory_access_string_is_valid (file_ptr))
     {
       return process_execute (file_ptr);
     }
@@ -179,8 +182,8 @@ static int syscall_wait (pid_t pid)
 static bool syscall_create (const char *file, unsigned initial_size)
 {
   char *file_ptr = *(char **) file;
-  if (!user_memory_access_is_valid (file_ptr) || strcmp (file_ptr, "") == 0
-      || !user_memory_access_buffer_is_valid (file_ptr, NAME_MAX))
+  if (!user_memory_access_string_is_valid (file_ptr) ||
+      strcmp (file_ptr, "") == 0)
     {
       syscall_exit (DEFAULT_ERR_EXIT_CODE);
     }
@@ -197,8 +200,7 @@ static bool syscall_create (const char *file, unsigned initial_size)
 static bool syscall_remove (const char *file)
 {
   char *file_ptr = *(char **) file;
-  if (!user_memory_access_is_valid (file_ptr)
-      || !user_memory_access_buffer_is_valid (file_ptr, NAME_MAX))
+  if (!user_memory_access_string_is_valid (file_ptr))
     {
       syscall_exit (DEFAULT_ERR_EXIT_CODE);
     }
@@ -211,8 +213,7 @@ static bool syscall_remove (const char *file)
 static int syscall_open (const char *file)
 {
   char *file_ptr = *(char **) file;
-  if (!user_memory_access_is_valid (file_ptr)
-      || !user_memory_access_buffer_is_valid (file_ptr, NAME_MAX))
+  if (!user_memory_access_string_is_valid (file_ptr))
     {
       syscall_exit (DEFAULT_ERR_EXIT_CODE);
     }
@@ -244,7 +245,8 @@ static int syscall_read (int fd, void *buffer, unsigned length)
 {
   char *buffer_ptr = *(char **) (buffer);
   struct file_node *file_node = file_node_lookup (fd);
-  if (!user_memory_access_is_valid (buffer_ptr) || file_node == NULL
+  if (!user_memory_access_is_valid (buffer_ptr)
+      || file_node == NULL
       || !user_memory_access_buffer_is_valid (buffer_ptr, length))
     {
       syscall_exit (DEFAULT_ERR_EXIT_CODE);
@@ -271,7 +273,7 @@ static int syscall_write (int fd, const void *buffer, unsigned length)
 {
   char *buffer_ptr = *(char **) (buffer);
   if (!user_memory_access_is_valid (buffer_ptr)
-      || !user_memory_access_buffer_is_valid (buffer_ptr, length))
+      || !user_memory_access_is_valid (buffer_ptr + length))
     {
       syscall_exit (DEFAULT_ERR_EXIT_CODE);
     }
@@ -335,24 +337,30 @@ static void syscall_close (int fd)
 
 /* ---------------- HELPER FUNCTIONS ---------------- */
 
-/* Check that user pointer is not a kernal addr. and not null. If
-   the pointer points to an unmapped page, we handle it in exception.c */
+/* Check that user pointer is not a kernel addr. and not null. */
 static bool
 user_memory_access_is_valid (void *user_ptr)
 {
-  return !(user_ptr == NULL ||
-           !is_user_vaddr (user_ptr));
+  return user_ptr != NULL &&
+         is_user_vaddr (user_ptr) &&
+         get_user ((uint8_t *) user_ptr) != -1;
 }
 
+/* Check that buffer can be written to and is a valid user address. */
 static bool
-user_memory_access_buffer_is_valid (void *user_ptr, unsigned length)
+user_memory_access_buffer_is_valid (void *user_ptr, int32_t length)
 {
   bool success = user_memory_access_is_valid (user_ptr + length);
-  while (success && length > PGSIZE)
+
+  do
     {
+      success = success &&
+                is_writable_segment (user_ptr + length) &&
+                get_user ((uint8_t *) user_ptr + length) != -1;
       length -= PGSIZE;
-      success = pagedir_get_page (thread_current ()->pagedir, user_ptr) != NULL;
     }
+  while (success && length > PGSIZE);
+
   return success;
 }
 
@@ -361,7 +369,10 @@ user_memory_access_buffer_is_valid (void *user_ptr, unsigned length)
 static bool
 user_memory_access_string_is_valid (void *user_ptr)
 {
-  return strnlen (user_ptr, PGSIZE) < PGSIZE + 1;
+  long string_length = strnlen (user_ptr, PGSIZE);
+  return string_length < PGSIZE + 1
+         && user_memory_access_is_valid (user_ptr)
+         && user_memory_access_is_valid (user_ptr + string_length);
 }
 
 /* Returns next file descriptor value for a specific thread. No synchronization
@@ -410,4 +421,28 @@ void free_file_node (struct hash_elem *element, void *aux UNUSED)
   file_close (fn->file);
   hash_delete (&thread_current ()->hash_table_of_file_nodes, element);
   free (fn);
+}
+
+bool
+is_writable_segment (const uint8_t *fault_addr)
+{
+  bool within_user_stack_space =
+      (PHYS_BASE - MAX_STACK_SPACE_IN_BYTES < fault_addr)
+      && (fault_addr < PHYS_BASE);
+  bool within_data_segment =
+      fault_addr >= thread_current ()->start_writable_segment_addr
+      && fault_addr < thread_current ()->end_writable_segment_addr;
+  return within_user_stack_space || within_data_segment;
+}
+
+/* Reads a byte at user virtual address UADDR.
+   UADDR must be below PHYS_BASE.
+   Returns the byte value if successful, -1 if a segfault occurred. */
+static int
+get_user (const uint8_t *uaddr)
+{
+  int result;
+  asm ("movl $1f, %0; movzbl %1, %0; 1:"
+  : "=&a" (result) : "m" (*uaddr));
+  return result;
 }
