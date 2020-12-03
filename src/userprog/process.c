@@ -625,6 +625,11 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
   ASSERT (pg_ofs (upage) == 0);
   ASSERT (ofs % PGSIZE == 0);
 
+  if (writable && thread_current()->start_writable_segment_addr == 0) {
+    thread_current()->start_writable_segment_addr = upage;
+    thread_current()->end_writable_segment_addr = upage + read_bytes + zero_bytes;
+  }
+
   /* Create an entry for every page we try to read, remembering to increment
      ofs so that we know where in the file we should read from. */
   while (read_bytes > 0 || zero_bytes > 0)
