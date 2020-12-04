@@ -9,33 +9,29 @@
 enum page_state {
   All_ZERO,
   FILE_SYSTEM,
-  SWAP_SLOT
+  SWAP_SLOT,
+  MMAP_FILE
 };
 
 /* Supplementary page table entry. */
 struct sup_pagetable_entry {
-  struct hash_elem hash_elem;
+  struct hash_elem spt_elem;
+  struct list_elem mmap_elem;
 
   void *upage;
-  void *kapge;
   enum page_state state;
   struct file *file;
   off_t ofs;
   uint32_t read_bytes;
   uint32_t zero_bytes;
   bool writable;
-
-  bool dirty;
-  bool accessed;
 };
 
 /* Adding to supplemental pagetable. */
-void
+struct sup_pagetable_entry *
 sup_pagetable_add_all_zero (void *upage, bool writable);
-void
-sup_pagetable_add_file (void *upage, struct file *file, off_t ofs,
-                        uint32_t read_bytes, uint32_t zero_bytes,
-                        bool writable);
+struct sup_pagetable_entry *
+sup_pagetable_add_file (enum page_state state, void *upage, struct file *file, off_t ofs, uint32_t read_bytes, uint32_t zero_bytes, bool writable);
 
 /* Functions to properly load the pages after a page fault occurs. */
 bool
