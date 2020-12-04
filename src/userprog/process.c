@@ -643,7 +643,7 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
         }
       else
         {
-          sup_pagetable_add_file (upage, file, ofs,
+          sup_pagetable_add_file (FILE_SYSTEM, upage, file, ofs,
                                   page_read_bytes, page_zero_bytes, writable);
         }
 

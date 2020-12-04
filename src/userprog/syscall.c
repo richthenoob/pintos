@@ -15,10 +15,12 @@
 #include "threads/malloc.h"
 #include "lib/string.h"
 #include "filesys/directory.h"
+#include <vm/page.h>
+#include <vm/mmap.h>
 
-#define SINGLE_ARG_SYSCALL_CUTOFF 8
-#define DOUBLE_ARG_SYSCALL_CUTOFF 10
-#define TRIPLE_ARG_SYSCALL_CUTOFF 12
+#define SINGLE_ARG_SYSCALL_CUTOFF 9
+#define DOUBLE_ARG_SYSCALL_CUTOFF 12
+#define TRIPLE_ARG_SYSCALL_CUTOFF 14
 
 static void syscall_handler (struct intr_frame *);
 static int single_arg_syscall (int syscall_no, void *arg1);
@@ -47,6 +49,10 @@ static int get_user (const uint8_t *uaddr);
 
 static int next_fd_value (void);
 static struct file_node *file_node_lookup (int fd);
+static void mmap_unmap (const struct hash_elem *p_, void *aux UNUSED);
+
+static mapid_t syscall_mmap (int fd, void *p_void);
+static void syscall_munmap (mapid_t fd);
 
 void
 syscall_init (void)
@@ -120,6 +126,9 @@ static int single_arg_syscall (int syscall_no, void *arg1)
       case SYS_CLOSE:
         syscall_close (*(int *) arg1);
       return 0;
+      case SYS_MUNMAP:
+        syscall_munmap (*(int *) arg1);
+      return 0;
       default:
         syscall_exit (DEFAULT_ERR_EXIT_CODE);
     }
@@ -133,7 +142,9 @@ static int double_arg_syscall (int syscall_no, void *arg1, void *arg2)
         return syscall_create ((const char *) arg1, *(unsigned *) arg2);
       case SYS_SEEK:
         syscall_seek (*(int *) arg1, *(unsigned *) arg2);
-      return 0;
+      break;
+      case SYS_MMAP:
+        return syscall_mmap (*(int *) arg1, *(int *) arg2);
       default:
         syscall_exit (DEFAULT_ERR_EXIT_CODE);
     }
@@ -156,6 +167,7 @@ static int triple_arg_syscall (int syscall_no, void *arg1,
 /* ---------------- SYSCALL FUNCTIONS ---------------- */
 static void syscall_exit (int exit_code)
 {
+  hash_apply (&(thread_current ()->mmap_hash_table), (void (*) (struct hash_elem *, void *)) mmap_unmap);
   process_exit_with_code (exit_code);
   NOT_REACHED()
 }
@@ -224,7 +236,6 @@ static int syscall_open (const char *file)
     {
       return DEFAULT_ERR_EXIT_CODE;
     }
-
   return add_to_hash_table_of_file_nodes (opened_file);
 }
 
@@ -327,7 +338,7 @@ static unsigned syscall_tell (int fd)
 static void syscall_close (int fd)
 {
   struct file_node *file_node = file_node_lookup (fd);
-  if (file_node != NULL)
+  if (file_node != NULL && file_node->mmap_count == 0)
     {
       lock_acquire (&filesys_lock);
       free_file_node (&file_node->hash_elem, NULL);
@@ -335,7 +346,137 @@ static void syscall_close (int fd)
     }
 }
 
-/* ---------------- HELPER FUNCTIONS ---------------- */
+static mapid_t syscall_mmap (int fd, void *addr)
+{
+  //todo: It must fail if addr is not page-aligned or if the range of pages
+  // mapped overlaps any existing set of
+  // mapped pages, including the stack or pages mapped at executable load time
+
+  if (addr == 0 || fd < 2 || (uint32_t) addr % PGSIZE != 0)
+    {
+      return -1;
+    }
+
+  /* Open the file. */
+  struct file_node *file_node = file_node_lookup (fd);
+  if (!file_node || !file_node->file)
+    {
+      return -1;
+    }
+  struct file *file = file_reopen (file_node->file);
+  if (file == NULL)
+    {
+      return -1;
+    }
+
+  off_t length = file_length (file);
+
+  /* Fail if the file opened has a length of zero bytes. */
+  if (length == 0)
+    {
+      return -1;
+    }
+
+  /* Assign a mmapid and push mmap_node into the hash table. */
+  struct mmap_node *mmap_node = (struct mmap_node *) malloc (sizeof (struct mmap_node));
+  mmap_node->mapid = next_mapid_value ();
+  mmap_node->fd = fd;
+  list_init (&mmap_node->list_pages_open);
+  hash_insert (&thread_current ()->mmap_hash_table, &mmap_node->hash_elem);
+  file_node->mmap_count += 1;
+
+  /* Determine the zero_bytes and the read_bytes. */
+  uint32_t read_bytes = length;
+  uint32_t zero_bytes = -1;
+  int n = 0;
+  while (n * PGSIZE < length)
+    {
+      ++n;
+    }
+  zero_bytes = n * PGSIZE - length;
+  /* Map into pages. */
+  //TODO: may be replaced by load_segment ?
+  off_t ofs = 0;
+  while (read_bytes > 0 || zero_bytes > 0)
+    {
+      if (pagedir_get_page (thread_current ()->pagedir, addr) != 0)
+        {
+          return -1;
+        }
+      if (sup_pagetable_entry_lookup (addr) != NULL)
+        {
+          // TODO free previously allocated sup. page table entries
+          return -1;
+        }
+
+      struct sup_pagetable_entry *entry;
+      size_t page_read_bytes = read_bytes < PGSIZE ? read_bytes : PGSIZE;
+      size_t page_zero_bytes = PGSIZE - page_read_bytes;
+
+      if (page_zero_bytes == PGSIZE)
+        {
+          entry = sup_pagetable_add_all_zero (addr, true);
+        }
+      else
+        {
+          entry = sup_pagetable_add_file (MMAP_FILE, addr, file, ofs, read_bytes, zero_bytes, true);
+        }
+
+      ofs += page_read_bytes;
+      read_bytes -= page_read_bytes;
+      zero_bytes -= page_zero_bytes;
+      addr += PGSIZE;
+
+      /* Add entry to this mmap node so that we can remove it accordingly
+         when the thread is terminated or when munmap is called. */
+      list_push_back (&mmap_node->list_pages_open, &entry->mmap_elem);
+    }
+
+  return mmap_node->mapid;
+}
+
+static void syscall_munmap (mapid_t mapping)
+{
+  struct mmap_node *mmap_node = mmap_node_lookup (mapping);
+  if (mmap_node == NULL)
+    {
+      return;
+    }
+
+  /* Store where the file pointer is before we write to it, so that we can
+     restore this information later on. */
+  unsigned initial_file_pos = syscall_tell (mmap_node->fd);
+
+  struct list_elem *e;
+  struct sup_pagetable_entry *spe;
+  struct list *list_pages_open = &mmap_node->list_pages_open;
+  for (e = list_begin (list_pages_open); e != list_end (list_pages_open);)
+    {
+      spe = list_entry (e, struct sup_pagetable_entry, mmap_elem);
+      e = list_next (e);
+
+      /* Write back to disk if page has been written to. */
+      if (pagedir_is_dirty (thread_current ()->pagedir, spe->upage))
+        {
+          syscall_write (mmap_node->fd, &spe->upage, spe->read_bytes);
+        }
+
+      /* Remove mapping from page directory and free the appropriate memory. */
+      pagedir_clear_page (thread_current ()->pagedir, spe->upage);
+      free_sup_page_entry (&spe->spt_elem, NULL);
+    }
+
+  /* Restore file pointer. */
+  syscall_seek (mmap_node->fd, initial_file_pos);
+
+  /* Remove this mmap_node's link to its corresponding file_node. */
+  file_node_lookup (mmap_node->fd)->mmap_count -= 1;
+
+  hash_delete (&thread_current ()->mmap_hash_table, &mmap_node->hash_elem);
+  free (mmap_node);
+}
+
+/* ---------------- MEMORY CHECK FUNCTIONS ---------------- */
 
 /* Check that user pointer is not a kernel addr. and not null. */
 static bool
@@ -374,6 +515,8 @@ user_memory_access_string_is_valid (void *user_ptr)
          && user_memory_access_is_valid (user_ptr)
          && user_memory_access_is_valid (user_ptr + string_length);
 }
+
+/* ---------------- FILESYSTEM FUNCTIONS ---------------- */
 
 /* Returns next file descriptor value for a specific thread. No synchronization
    needed since a thread only accesses its own hash table. */
@@ -423,26 +566,8 @@ void free_file_node (struct hash_elem *element, void *aux UNUSED)
   free (fn);
 }
 
-bool
-is_writable_segment (const uint8_t *fault_addr)
+static void mmap_unmap (const struct hash_elem *p_, void *aux UNUSED)
 {
-  bool within_user_stack_space =
-      (PHYS_BASE - MAX_STACK_SPACE_IN_BYTES < fault_addr)
-      && (fault_addr < PHYS_BASE);
-  bool within_data_segment =
-      fault_addr >= thread_current ()->start_writable_segment_addr
-      && fault_addr < thread_current ()->end_writable_segment_addr;
-  return within_user_stack_space || within_data_segment;
-}
-
-/* Reads a byte at user virtual address UADDR.
-   UADDR must be below PHYS_BASE.
-   Returns the byte value if successful, -1 if a segfault occurred. */
-static int
-get_user (const uint8_t *uaddr)
-{
-  int result;
-  asm ("movl $1f, %0; movzbl %1, %0; 1:"
-  : "=&a" (result) : "m" (*uaddr));
-  return result;
+  const struct mmap_node *p = hash_entry(p_, struct mmap_node, hash_elem);
+  syscall_munmap (p->mapid);
 }
