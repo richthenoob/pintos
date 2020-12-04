@@ -188,7 +188,6 @@ page_fault (struct intr_frame *f)
           case All_ZERO:
             success = sup_pagetable_load_all_zero (entry);
           break;
-          case MMAP_FILE:
           case FILE_SYSTEM:
             success = sup_pagetable_load_file (entry);
           break;

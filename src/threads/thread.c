@@ -6,7 +6,6 @@
 #include <string.h>
 #include <userprog/syscall.h>
 #include <vm/page.h>
-#include <vm/mmap.h>
 #include "threads/flags.h"
 #include "threads/interrupt.h"
 #include "threads/intr-stubs.h"
@@ -279,8 +278,7 @@ thread_create (const char *name, int priority,
 #endif
   /* Initialise the supplementary page table. */
   hash_init (&t->sup_pagetable, sup_page_hash, sup_page_cmp, NULL);
-  /* Initialise the mmap node hash table. */
-  hash_init (&t->mmap_hash_table, mmap_hash, mmap_cmp, NULL);
+
   /* Add to run queue. */
   thread_unblock (t);
 
