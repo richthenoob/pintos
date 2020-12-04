@@ -7,21 +7,27 @@
 #include "userprog/process.h"
 #include "vm/frame.h"
 
-struct sup_pagetable_entry *
+void
 sup_pagetable_add_all_zero (void *upage, bool writable)
 {
-  return sup_pagetable_add_file (All_ZERO, upage, NULL, 0, 0, 0, writable);
+  struct sup_pagetable_entry *entry
+      = (struct sup_pagetable_entry *) malloc (sizeof (struct sup_pagetable_entry));
+  entry->state = All_ZERO;
+  entry->upage = upage;
+  entry->writable = writable;
+  // TODO: possible add more information here?
+
+  hash_insert (&thread_current ()->sup_pagetable, &entry->hash_elem);
 }
 
-struct sup_pagetable_entry *
-sup_pagetable_add_file (enum page_state state, void *upage,
-                        struct file *file, off_t ofs, uint32_t read_bytes,
-                        uint32_t zero_bytes, bool writable)
+void
+sup_pagetable_add_file (void *upage, struct file *file, off_t ofs,
+                        uint32_t read_bytes, uint32_t zero_bytes, bool writable)
 {
   /* Record file information in a page. */
   struct sup_pagetable_entry *entry
       = (struct sup_pagetable_entry *) malloc (sizeof (struct sup_pagetable_entry));
-  entry->state = state;
+  entry->state = FILE_SYSTEM;
   entry->upage = upage;
   entry->file = file;
   entry->ofs = ofs;
@@ -29,10 +35,11 @@ sup_pagetable_add_file (enum page_state state, void *upage,
   entry->zero_bytes = zero_bytes;
   entry->writable = writable;
 
-  /* Add the page to the supplemental page table. */
-  hash_insert (&thread_current ()->sup_pagetable, &entry->spt_elem);
+  entry->dirty = false;
+  entry->accessed = false;
 
-  return entry;
+  /* Add the page to the supplemental page table. */
+  hash_insert (&thread_current ()->sup_pagetable, &entry->hash_elem);
 }
 
 bool
@@ -61,12 +68,8 @@ sup_pagetable_load_all_zero (struct sup_pagetable_entry *entry)
     }
 
   /* Supplemental pagetable entry is not needed anymore since we have
-   successfully loaded into memory. Do not free if state is MMAP_FILE since
-   the mmap entry still requires this struct. */
-  if (entry->state == All_ZERO || entry->state == FILE_SYSTEM)
-    {
-      free_sup_page_entry (&entry->spt_elem, NULL);
-    }
+   successfully loaded into memory. */
+  free_sup_page_entry (&entry->hash_elem, NULL);
   return true;
 }
 
@@ -111,10 +114,8 @@ sup_pagetable_load_file (struct sup_pagetable_entry *entry)
 
   /* Supplemental pagetable entry is not needed anymore since we have
      successfully loaded into memory. */
-  if (entry->state == All_ZERO || entry->state == FILE_SYSTEM)
-    {
-      free_sup_page_entry (&entry->spt_elem, NULL);
-    }
+  free_sup_page_entry (&entry->hash_elem, NULL);
+
   return true;
 }
 
@@ -125,9 +126,9 @@ sup_pagetable_entry_lookup (void *page)
   struct sup_pagetable_entry entry;
   struct hash_elem *e;
   entry.upage = page;
-  e = hash_find (&thread_current ()->sup_pagetable, &entry.spt_elem);
+  e = hash_find (&thread_current ()->sup_pagetable, &entry.hash_elem);
   return e != NULL
-         ? hash_entry (e, struct sup_pagetable_entry, spt_elem)
+         ? hash_entry (e, struct sup_pagetable_entry, hash_elem)
          : NULL;
 }
 
@@ -135,7 +136,7 @@ sup_pagetable_entry_lookup (void *page)
 unsigned
 sup_page_hash (const struct hash_elem *p_, void *aux UNUSED)
 {
-  const struct sup_pagetable_entry *p = hash_entry(p_, struct sup_pagetable_entry, spt_elem);
+  const struct sup_pagetable_entry *p = hash_entry(p_, struct sup_pagetable_entry, hash_elem);
   return hash_bytes (&p->upage, sizeof p->upage);
 }
 
@@ -143,8 +144,8 @@ bool
 sup_page_cmp (const struct hash_elem *a_, const struct hash_elem *b_,
               void *aux UNUSED)
 {
-  const struct sup_pagetable_entry *a = hash_entry (a_, struct sup_pagetable_entry, spt_elem);
-  const struct sup_pagetable_entry *b = hash_entry (b_, struct sup_pagetable_entry, spt_elem);
+  const struct sup_pagetable_entry *a = hash_entry (a_, struct sup_pagetable_entry, hash_elem);
+  const struct sup_pagetable_entry *b = hash_entry (b_, struct sup_pagetable_entry, hash_elem);
   return a->upage < b->upage;
 }
 
@@ -152,7 +153,7 @@ void free_sup_page_entry (struct hash_elem *element, void *aux UNUSED)
 {
   struct sup_pagetable_entry *entry = hash_entry (element,
                                                   struct sup_pagetable_entry,
-                                                  spt_elem);
+                                                  hash_elem);
   hash_delete (&thread_current ()->sup_pagetable, element);
   free (entry);
 }

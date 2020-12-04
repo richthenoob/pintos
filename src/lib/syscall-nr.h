@@ -15,16 +15,16 @@ enum
     SYS_FILESIZE,               /* Obtain a file's size. */
     SYS_TELL,                   /* Report current position in a file. */
     SYS_CLOSE,                  /* Close a file. */
-    SYS_MUNMAP,                 /* Remove a memory mapping. */
-
-  /* Two argument syscalls */
+    /* Two argument syscalls */
     SYS_CREATE,                 /* Create a file. */
     SYS_SEEK,                   /* Change position in a file. */
-    SYS_MMAP,                   /* Map a file into memory. */
-
-  /* Three argument syscalls */
+    /* Three argument syscalls */
     SYS_READ,                   /* Read from a file. */
     SYS_WRITE,                  /* Write to a file. */
+
+    /* Task 3 and optionally task 4. */
+    SYS_MMAP,                   /* Map a file into memory. */
+    SYS_MUNMAP,                 /* Remove a memory mapping. */
 
     /* Task 4 only. */
     SYS_CHDIR,                  /* Change the current directory. */
