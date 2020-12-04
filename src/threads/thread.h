@@ -97,6 +97,7 @@ struct thread {
 
   struct hash hash_table_of_file_nodes;
   struct hash sup_pagetable;     /* Supplementary page table. */
+  struct hash mmap_hash_table;   /* Hash table of memory mapped files. */
 /* Hash table for file nodes. */
 #ifdef USERPROG
   /* Owned by userprog/process.c. */

@@ -14,6 +14,7 @@ void syscall_init (void);
 struct file_node {
   struct hash_elem hash_elem;
   int fd;
+  int mmap_count;
   struct file *file;
 };
 
