@@ -570,7 +570,7 @@ static void mmap_unmap (const struct hash_elem *p_, void *aux UNUSED)
 {
   const struct mmap_node *p = hash_entry(p_, struct mmap_node, hash_elem);
   syscall_munmap (p->mapid);
-
+}
 bool
 is_writable_segment (const uint8_t *fault_addr)
 {
