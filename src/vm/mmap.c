@@ -2,23 +2,6 @@
 #include "userprog/syscall.h"
 #include "threads/thread.h"
 
-/* Helper functions. */
-unsigned
-mmap_hash (const struct hash_elem *p_, void *aux UNUSED)
-{
-  const struct mmap_node *p = hash_entry(p_, struct mmap_node, hash_elem);
-  return hash_bytes (&p->mapid, sizeof p->mapid);
-}
-
-bool
-mmap_cmp (const struct hash_elem *a_, const struct hash_elem *b_,
-          void *aux UNUSED)
-{
-  const struct mmap_node *a = hash_entry (a_, struct mmap_node, hash_elem);
-  const struct mmap_node *b = hash_entry (b_, struct mmap_node, hash_elem);
-  return a->mapid < b->mapid;
-}
-
 /* Find a memory mapped node of the current thread's mmap_hash_table given a
    mmap id. No synchronization needed since a thread only
    accesses its own hash table. */
@@ -38,4 +21,21 @@ mapid_t
 next_mapid_value (void)
 {
   return hash_size (&thread_current ()->mmap_hash_table);
+}
+
+/* Helper functions. */
+unsigned
+mmap_hash (const struct hash_elem *p_, void *aux UNUSED)
+{
+  const struct mmap_node *p = hash_entry(p_, struct mmap_node, hash_elem);
+  return hash_bytes (&p->mapid, sizeof p->mapid);
+}
+
+bool
+mmap_cmp (const struct hash_elem *a_, const struct hash_elem *b_,
+          void *aux UNUSED)
+{
+  const struct mmap_node *a = hash_entry (a_, struct mmap_node, hash_elem);
+  const struct mmap_node *b = hash_entry (b_, struct mmap_node, hash_elem);
+  return a->mapid < b->mapid;
 }

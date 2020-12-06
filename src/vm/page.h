@@ -6,6 +6,7 @@
 #include <debug.h>
 #include <filesys/off_t.h>
 
+/* Keeps track of the state of a supplemental. */
 enum page_state {
   All_ZERO,
   FILE_SYSTEM,
@@ -13,13 +14,15 @@ enum page_state {
   MMAP_FILE
 };
 
-/* Supplementary page table entry. */
+/* Supplemental page table entry. */
 struct sup_pagetable_entry {
   struct hash_elem spt_elem;
   struct list_elem mmap_elem;
 
-  void *upage;
+  void *upage;                /* User page. */
   enum page_state state;
+
+  /* Record the information of a file. */
   struct file *file;
   off_t ofs;
   uint32_t read_bytes;
@@ -27,7 +30,7 @@ struct sup_pagetable_entry {
   bool writable;
 };
 
-/* Adding to supplemental pagetable. */
+/* Adding to supplemental page table. */
 struct sup_pagetable_entry *
 sup_pagetable_add_all_zero (void *upage, bool writable);
 struct sup_pagetable_entry *

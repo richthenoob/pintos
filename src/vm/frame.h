@@ -9,11 +9,11 @@ struct frame {
   void *page_ptr;
 };
 
+struct hash frametable;               /* Hashtable to store frames. */
+struct lock frametable_lock;          /* Lock used for the frame. */
+
 struct frame *falloc_get_frame (bool zero);
 void falloc_free_frame (struct frame *frame_ptr);
 struct frame *frame_lookup (void *page_ptr);
-
-struct hash frametable;
-struct lock frametable_lock;
 
 #endif /* vm/frame.h */

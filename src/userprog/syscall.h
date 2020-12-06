@@ -13,8 +13,8 @@ void syscall_init (void);
 
 struct file_node {
   struct hash_elem hash_elem;
-  int fd;
-  int mmap_count;
+  int fd;                           /* File descriptor. */
+  int mmap_count;                   /* Record the number of mapping. */
   struct file *file;
 };
 

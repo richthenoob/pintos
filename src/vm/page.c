@@ -7,12 +7,14 @@
 #include "userprog/process.h"
 #include "vm/frame.h"
 
+/* Add an entry to the supplemental page table in all-zero situation. */
 struct sup_pagetable_entry *
 sup_pagetable_add_all_zero (void *upage, bool writable)
 {
   return sup_pagetable_add_file (All_ZERO, upage, NULL, 0, 0, 0, writable);
 }
 
+/* Add an entry to the supplemental page table with information of a file. */
 struct sup_pagetable_entry *
 sup_pagetable_add_file (enum page_state state, void *upage,
                         struct file *file, off_t ofs, uint32_t read_bytes,
@@ -35,6 +37,7 @@ sup_pagetable_add_file (enum page_state state, void *upage,
   return entry;
 }
 
+/* Actual loading in all-zero situation. */
 bool
 sup_pagetable_load_all_zero (struct sup_pagetable_entry *entry)
 {
@@ -70,12 +73,13 @@ sup_pagetable_load_all_zero (struct sup_pagetable_entry *entry)
   return true;
 }
 
+/* Actual loading a file. */
 bool
 sup_pagetable_load_file (struct sup_pagetable_entry *entry)
 {
   file_seek (entry->file, entry->ofs);
 
-  /* Check if virtual page already allocated */
+  /* Check if virtual page already allocated. */
   struct frame *kframe;
   struct thread *t = thread_current ();
   uint8_t *kpage = pagedir_get_page (t->pagedir, entry->upage);
@@ -109,7 +113,7 @@ sup_pagetable_load_file (struct sup_pagetable_entry *entry)
 
   memset (kpage + entry->read_bytes, 0, entry->zero_bytes);
 
-  /* Supplemental pagetable entry is not needed anymore since we have
+  /* Supplemental page table entry is not needed anymore since we have
      successfully loaded into memory. */
   if (entry->state == All_ZERO || entry->state == FILE_SYSTEM)
     {

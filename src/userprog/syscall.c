@@ -348,10 +348,8 @@ static void syscall_close (int fd)
 
 static mapid_t syscall_mmap (int fd, void *addr)
 {
-  //todo: It must fail if addr is not page-aligned or if the range of pages
-  // mapped overlaps any existing set of
-  // mapped pages, including the stack or pages mapped at executable load time
 
+  /* Check if the input of fd and addr are valid. */
   if (addr == 0 || fd < 2 || (uint32_t) addr % PGSIZE != 0)
     {
       return -1;
@@ -394,8 +392,8 @@ static mapid_t syscall_mmap (int fd, void *addr)
       ++n;
     }
   zero_bytes = n * PGSIZE - length;
+
   /* Map into pages. */
-  //TODO: may be replaced by load_segment ?
   off_t ofs = 0;
   while (read_bytes > 0 || zero_bytes > 0)
     {
@@ -409,6 +407,7 @@ static mapid_t syscall_mmap (int fd, void *addr)
           return -1;
         }
 
+      /* Lazy loading. */
       struct sup_pagetable_entry *entry;
       size_t page_read_bytes = read_bytes < PGSIZE ? read_bytes : PGSIZE;
       size_t page_zero_bytes = PGSIZE - page_read_bytes;
@@ -437,6 +436,7 @@ static mapid_t syscall_mmap (int fd, void *addr)
 
 static void syscall_munmap (mapid_t mapping)
 {
+  /* Check if the node is mapped. */
   struct mmap_node *mmap_node = mmap_node_lookup (mapping);
   if (mmap_node == NULL)
     {
@@ -450,6 +450,7 @@ static void syscall_munmap (mapid_t mapping)
   struct list_elem *e;
   struct sup_pagetable_entry *spe;
   struct list *list_pages_open = &mmap_node->list_pages_open;
+
   for (e = list_begin (list_pages_open); e != list_end (list_pages_open);)
     {
       spe = list_entry (e, struct sup_pagetable_entry, mmap_elem);
