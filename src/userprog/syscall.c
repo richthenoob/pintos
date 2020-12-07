@@ -407,7 +407,6 @@ static mapid_t syscall_mmap (int fd, void *addr)
           return -1;
         }
 
-      /* Lazy loading. */
       struct sup_pagetable_entry *entry;
       size_t page_read_bytes = read_bytes < PGSIZE ? read_bytes : PGSIZE;
       size_t page_zero_bytes = PGSIZE - page_read_bytes;
