@@ -1,5 +1,6 @@
 #include "page.h"
 #include <string.h>
+#include <stdio.h>
 #include "userprog/pagedir.h"
 #include "filesys/file.h"
 #include "threads/malloc.h"
@@ -9,9 +10,9 @@
 
 /* Add an entry to the supplemental page table in all-zero situation. */
 struct sup_pagetable_entry *
-sup_pagetable_add_all_zero (void *upage, bool writable)
+sup_pagetable_add_all_zero (void *upage, bool writable, struct file *file)
 {
-  return sup_pagetable_add_file (All_ZERO, upage, NULL, 0, 0, 0, writable);
+  return sup_pagetable_add_file (All_ZERO, upage, file, 0, 0, 0, writable);
 }
 
 /* Add an entry to the supplemental page table with information of a file. */
@@ -49,14 +50,15 @@ sup_pagetable_load_all_zero (struct sup_pagetable_entry *entry)
     {
 
       /* Get a new frame of memory. */
-      struct frame *kframe = falloc_get_frame (true);
+      struct frame *kframe = falloc_get_frame (true, All_ZERO, entry->upage, NULL, entry
+          ->writable);
       if (kframe == NULL)
         {
           return false;
         }
 
       /* Add the page to the process's address space. */
-      if (!install_page (entry->upage, kframe->page_ptr, entry->writable))
+      if (!install_page (entry->upage, kframe->kernel_page_addr, entry->writable))
         {
           falloc_free_frame (kframe);
           return false;
@@ -77,7 +79,9 @@ sup_pagetable_load_all_zero (struct sup_pagetable_entry *entry)
 bool
 sup_pagetable_load_file (struct sup_pagetable_entry *entry)
 {
+  lock_acquire (&filesys_lock);
   file_seek (entry->file, entry->ofs);
+  lock_release (&filesys_lock);
 
   /* Check if virtual page already allocated. */
   struct frame *kframe;
@@ -87,29 +91,49 @@ sup_pagetable_load_file (struct sup_pagetable_entry *entry)
   if (kpage == NULL)
     {
 
+      /* Attempt sharing if page is read-only. */
+      if (!entry->writable && entry->state == FILE_SYSTEM)
+        {
+          kframe = read_only_frame_lookup (entry->file, entry->upage);
+          if (kframe)
+            {
+              lock_acquire (&kframe->frame_lock);
+              kframe->counter++;
+              lock_release (&kframe->frame_lock);
+              install_page (entry->upage, kframe->kernel_page_addr, entry->writable);
+              return true;
+            }
+        }
+
       /* Get a new page of memory. */
-      kframe = falloc_get_frame (true);
+      kframe = falloc_get_frame (false, FILE_SYSTEM,
+                                 entry->upage, entry->file, entry->writable);
       if (kframe == NULL)
         {
           return false;
         }
 
       /* Add the page to the process's address space. */
-      if (!install_page (entry->upage, kframe->page_ptr, entry->writable))
+      if (!install_page (entry->upage, kframe->kernel_page_addr, entry->writable))
         {
           falloc_free_frame (kframe);
           return false;
         }
-      kpage = kframe->page_ptr;
+
+      /* Page obtained successfully. */
+      kpage = kframe->kernel_page_addr;
     }
 
   /* Load data into the page. */
+  lock_acquire (&filesys_lock);
   if (file_read (entry->file, kpage, entry->read_bytes)
       != (int) entry->read_bytes)
     {
+      lock_release (&filesys_lock);
       falloc_free_frame (kframe);
       return false;
     }
+  lock_release (&filesys_lock);
 
   memset (kpage + entry->read_bytes, 0, entry->zero_bytes);
 

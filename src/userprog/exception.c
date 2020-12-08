@@ -169,8 +169,8 @@ page_fault (struct intr_frame *f)
               offset <= MAX_OFFSET_FROM_STACK_PTR_IN_BYTES)
             {
               /* Attempt to grow stack. */
-              struct frame *kframe = falloc_get_frame (true);
-              if (!install_page (rounded_fault_page, kframe->page_ptr, true))
+              struct frame *kframe = falloc_get_frame (true, STACK, rounded_fault_page, NULL, true);
+              if (!install_page (rounded_fault_page, kframe->kernel_page_addr, true))
                 {
                   falloc_free_frame (kframe);
                 }

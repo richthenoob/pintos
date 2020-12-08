@@ -113,7 +113,7 @@ process_less (const struct hash_elem *a_, const struct hash_elem *b_,
 static unsigned frame_hash (const struct hash_elem *f_, void *aux UNUSED)
 {
   struct frame *f = hash_entry (f_, struct frame, hash_elem);
-  return hash_bytes (f->page_ptr, sizeof (f->page_ptr));
+  return hash_bytes (f->kernel_page_addr, sizeof (f->kernel_page_addr));
 }
 
 static bool
@@ -122,7 +122,7 @@ frame_less (const struct hash_elem *a_, const struct hash_elem *b_,
 {
   struct frame *a = hash_entry (a_, struct frame, hash_elem);
   struct frame *b = hash_entry (b_, struct frame, hash_elem);
-  return a->page_ptr < b->page_ptr;
+  return a->kernel_page_addr < b->kernel_page_addr;
 }
 
 /* Initializes the threading system by transforming the code
