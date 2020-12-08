@@ -3,6 +3,7 @@
 #include "userprog/process.h"
 #include "threads/palloc.h"
 #include "threads/malloc.h"
+#include "threads/thread.h"
 
 /* Find a frame in the frame table, given a page pointer. */
 struct frame *frame_lookup (void *page_ptr)
@@ -44,6 +45,8 @@ falloc_get_frame (bool zero, enum page_state state, void *user_page_addr,
   hash_insert (&frametable, &frame_ptr->hash_elem);
   lock_release (&frametable_lock);
 
+  list_push_front(&thread_current()->frame_list,&frame_ptr->list_elem);
+
   return frame_ptr;
 }
 
@@ -54,7 +57,6 @@ void falloc_free_frame (struct frame *frame_ptr)
   hash_delete (&frametable, &frame_ptr->hash_elem);
   lock_release (&frametable_lock);
 
-  palloc_free_page (frame_ptr->kernel_page_addr);
   free (frame_ptr);
 }
 

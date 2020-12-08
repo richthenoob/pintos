@@ -4,6 +4,8 @@
 #include <debug.h>
 #include <list.h>
 #include <stdint.h>
+#include <hash.h>
+
 #ifdef USERPROG
 #include <lib/kernel/hash.h>
 #include "synch.h"
@@ -98,6 +100,8 @@ struct thread {
   struct hash hash_table_of_file_nodes;
   struct hash sup_pagetable;     /* Supplementary page table. */
   struct hash mmap_hash_table;   /* Hash table of memory mapped files. */
+  struct list frame_list;
+
 /* Hash table for file nodes. */
 #ifdef USERPROG
   /* Owned by userprog/process.c. */

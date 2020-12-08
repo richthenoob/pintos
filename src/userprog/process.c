@@ -23,6 +23,7 @@
 
 static thread_func start_process NO_RETURN;
 static bool load (const char *cmdline, void (**eip) (void), void **esp);
+static void free_frames (void);
 
 /* Locates a process in process_hashtable given a pid. Must hold process_lock
   before calling this function. */
@@ -167,9 +168,11 @@ start_process (void *file_name_)
      how much more space we need to store the rest of the stack. Since this
      is floor division, we can be sure that arg_max will never overflow the
      stack. */
-  long arg_max = (PGSIZE - (4 * sizeof(void *))    /* Reserve space for return address, argc, argv and null pointer sentinel */
-                         - (argc * sizeof(void *)) /* Reserve space for pointers to arguments. */
-                 ) / argc;
+  long arg_max =
+      (PGSIZE - (4
+                 * sizeof (void *))    /* Reserve space for return address, argc, argv and null pointer sentinel */
+       - (argc * sizeof (void *)) /* Reserve space for pointers to arguments. */
+      ) / argc;
 
   /* Push arguments in reverse order, storing each address into argv_addr. */
   for (int i = argc - 1; i >= 0; --i)
@@ -313,6 +316,9 @@ process_exit_with_code (int exit_code)
   hash_destroy (&thread_current ()->hash_table_of_file_nodes, free_file_node);
   lock_release (&filesys_lock);
 
+  /* Free all the frames used by this process. */
+  free_frames ();
+
   /* Free thread's supplemental page table entries. */
   hash_destroy (&thread_current ()->sup_pagetable, free_sup_page_entry);
 
@@ -320,6 +326,19 @@ process_exit_with_code (int exit_code)
   ASSERT (!lock_held_by_current_thread (&process_lock));
   ASSERT (!lock_held_by_current_thread (&filesys_lock));
   thread_exit ();
+}
+
+static void free_frames (void)
+{
+  struct list *frame_list = &thread_current ()->frame_list;
+  struct list_elem *e;
+  struct frame *f;
+  for (e = list_begin (frame_list); e != list_end (frame_list);)
+    {
+      f = list_entry (e, struct frame, list_elem);
+      e = list_next (e);
+      falloc_free_frame (f);
+    }
 }
 
 /* Free the current process's resources. */
@@ -646,10 +665,12 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
   ASSERT (pg_ofs (upage) == 0);
   ASSERT (ofs % PGSIZE == 0);
 
-  if (writable && thread_current()->start_writable_segment_addr == 0) {
-    thread_current()->start_writable_segment_addr = upage;
-    thread_current()->end_writable_segment_addr = upage + read_bytes + zero_bytes;
-  }
+  if (writable && thread_current ()->start_writable_segment_addr == 0)
+    {
+      thread_current ()->start_writable_segment_addr = upage;
+      thread_current ()->end_writable_segment_addr =
+          upage + read_bytes + zero_bytes;
+    }
 
   /* Create an entry for every page we try to read, remembering to increment
      ofs so that we know where in the file we should read from. */
@@ -692,7 +713,7 @@ setup_stack (void **esp)
       if (success)
         *esp = PHYS_BASE;
       else
-        falloc_free_frame(kframe);
+        falloc_free_frame (kframe);
     }
   return success;
 }
