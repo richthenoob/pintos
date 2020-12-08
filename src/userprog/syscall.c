@@ -361,13 +361,17 @@ static mapid_t syscall_mmap (int fd, void *addr)
     {
       return -1;
     }
+  lock_acquire(&filesys_lock);
   struct file *file = file_reopen (file_node->file);
+  lock_release(&filesys_lock);
   if (file == NULL)
     {
       return -1;
     }
 
+  lock_acquire(&filesys_lock);
   off_t length = file_length (file);
+  lock_release(&filesys_lock);
 
   /* Fail if the file opened has a length of zero bytes. */
   if (length == 0)
@@ -413,7 +417,7 @@ static mapid_t syscall_mmap (int fd, void *addr)
 
       if (page_zero_bytes == PGSIZE)
         {
-          entry = sup_pagetable_add_all_zero (addr, true);
+          entry = sup_pagetable_add_all_zero (addr, true, file);
         }
       else
         {

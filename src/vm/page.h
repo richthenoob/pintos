@@ -11,7 +11,8 @@ enum page_state {
   All_ZERO,
   FILE_SYSTEM,
   SWAP_SLOT,
-  MMAP_FILE
+  MMAP_FILE,
+  STACK
 };
 
 /* Supplemental page table entry. */
@@ -32,7 +33,7 @@ struct sup_pagetable_entry {
 
 /* Adding to supplemental page table. */
 struct sup_pagetable_entry *
-sup_pagetable_add_all_zero (void *upage, bool writable);
+sup_pagetable_add_all_zero (void *upage, bool writable, struct file *file);
 struct sup_pagetable_entry *
 sup_pagetable_add_file (enum page_state state, void *upage, struct file *file, off_t ofs, uint32_t read_bytes, uint32_t zero_bytes, bool writable);
 
