@@ -114,7 +114,7 @@ process_less (const struct hash_elem *a_, const struct hash_elem *b_,
 static unsigned frame_hash (const struct hash_elem *f_, void *aux UNUSED)
 {
   struct frame *f = hash_entry (f_, struct frame, hash_elem);
-  return hash_bytes (f->kernel_page_addr, sizeof (f->kernel_page_addr));
+  return hash_bytes (&f->kernel_page_addr, sizeof (f->kernel_page_addr));
 }
 
 static bool
