@@ -3,11 +3,14 @@
 
 #include <lib/kernel/hash.h>
 #include <threads/synch.h>
+#include <lib/kernel/bitmap.h>
+#include <lib/kernel/list.h>
 #include "vm/page.h"
 
 struct frame {
   struct lock frame_lock;
   struct hash_elem hash_elem;
+  struct list_elem list_elem;
   enum page_state state;
   void *kernel_page_addr;
   void *user_page_addr;

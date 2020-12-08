@@ -15,6 +15,7 @@
 #include "threads/synch.h"
 #include "threads/vaddr.h"
 #include "userprog/process.h"
+#include "vm/frame.h"
 #ifdef USERPROG
 #include "userprog/process.h"
 #include "threads/malloc.h"
@@ -281,6 +282,8 @@ thread_create (const char *name, int priority,
   hash_init (&t->sup_pagetable, sup_page_hash, sup_page_cmp, NULL);
   /* Initialise the mmap node hash table. */
   hash_init (&t->mmap_hash_table, mmap_hash, mmap_cmp, NULL);
+  /* Initialise the frame list. */
+  list_init(&t->frame_list);
   /* Add to run queue. */
   thread_unblock (t);
 
