@@ -21,6 +21,8 @@
 #include "userprog/filesys_wrapper.h"
 #include "vm/frame.h"
 #include "vm/page.h"
+#define MAX(a, b) (((a) > (b)) ? (a) : (b))
+#define MIN(a, b) (((a) < (b)) ? (a) : (b))
 #endif
 
 static thread_func start_process NO_RETURN;
@@ -345,8 +347,8 @@ static void free_frames (void)
         }
       else
         {
-         struct list_elem *next_owner_elem=  list_pop_front(&f->threads_users);
-         f->owner = list_entry(next_owner_elem,struct thread,frame_elem);
+          struct list_elem *next_owner_elem = list_pop_front (&f->threads_users);
+          f->owner = list_entry(next_owner_elem, struct thread, frame_elem);
         }
     }
 }
@@ -695,6 +697,19 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
         }
       else
         {
+          struct sup_pagetable_entry *entry = sup_pagetable_entry_lookup (upage);
+          if (entry != NULL)
+            {
+              /* Loading of segments onto same page, so update entry and
+                 re-insert into supplemental page table. */
+              ASSERT (entry->upage == upage)
+              ASSERT (entry->file == file)
+              ofs = MAX (ofs, entry->ofs);
+              page_read_bytes = MAX(page_read_bytes, entry->read_bytes);
+              page_zero_bytes = MIN(page_zero_bytes, entry->zero_bytes);
+              writable = writable || entry->writable;
+              free_sup_page_entry (&entry->spt_elem, NULL);
+            }
           sup_pagetable_add_file (thread_current (), FILE_SYSTEM, upage, file, ofs,
                                   page_read_bytes, page_zero_bytes, writable);
         }
