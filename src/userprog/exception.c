@@ -1,16 +1,22 @@
 #include "userprog/exception.h"
 #include <inttypes.h>
 #include <stdio.h>
+#include <threads/vaddr.h>
 #include "userprog/gdt.h"
 #include "threads/interrupt.h"
 #include "threads/thread.h"
 #include "userprog/process.h"
+#include "vm/page.h"
+#include "vm/frame.h"
+#include "userprog/syscall.h"
 
 /* Number of page faults processed. */
 static long long page_fault_cnt;
 
 static void kill (struct intr_frame *);
 static void page_fault (struct intr_frame *);
+static bool grow_stack (void *user_addr_rounded);
+static bool is_valid_stack_access (void *user_esp, void *fault_addr);
 
 /* Registers handlers for interrupts that can be caused by user
    programs.
@@ -28,7 +34,7 @@ static void page_fault (struct intr_frame *);
    Refer to [IA32-v3a] section 5.15 "Exception and Interrupt
    Reference" for a description of each of these exceptions. */
 void
-exception_init (void) 
+exception_init (void)
 {
   /* These exceptions can be raised explicitly by a user program,
      e.g. via the INT, INT3, INTO, and BOUND instructions.  Thus,
@@ -60,14 +66,14 @@ exception_init (void)
 
 /* Prints exception statistics. */
 void
-exception_print_stats (void) 
+exception_print_stats (void)
 {
   printf ("Exception: %lld page faults\n", page_fault_cnt);
 }
 
 /* Handler for an exception (probably) caused by a user process. */
 static void
-kill (struct intr_frame *f) 
+kill (struct intr_frame *f)
 {
   /* This interrupt is one (probably) caused by a user process.
      For example, the process might have tried to access unmapped
@@ -76,33 +82,33 @@ kill (struct intr_frame *f)
      the kernel.  Real Unix-like operating systems pass most
      exceptions back to the process via signals, but we don't
      implement them. */
-     
+
   /* The interrupt frame's code segment value tells us where the
      exception originated. */
   switch (f->cs)
     {
-    case SEL_UCSEG:
-      /* User's code segment, so it's a user exception, as we
-         expected.  Kill the user process.  */
-      printf ("%s: dying due to interrupt %#04x (%s).\n",
-              thread_name (), f->vec_no, intr_name (f->vec_no));
-      intr_dump_frame (f);
-      process_exit_with_code (-1);
+      case SEL_UCSEG:
+        /* User's code segment, so it's a user exception, as we
+           expected.  Kill the user process.  */
+//      printf ("%s: dying due to interrupt %#04x (%s).\n",
+//              thread_name (), f->vec_no, intr_name (f->vec_no));
+//      intr_dump_frame (f);
+        process_exit_with_code (-1);
       NOT_REACHED()
 
-    case SEL_KCSEG:
-      /* Kernel's code segment, which indicates a kernel bug.
-         Kernel code shouldn't throw exceptions.  (Page faults
-         may cause kernel exceptions--but they shouldn't arrive
-         here.)  Panic the kernel to make the point.  */
-      intr_dump_frame (f);
-      PANIC ("Kernel bug - unexpected interrupt in kernel"); 
+      case SEL_KCSEG:
+        /* Kernel's code segment, which indicates a kernel bug.
+           Kernel code shouldn't throw exceptions.  (Page faults
+           may cause kernel exceptions--but they shouldn't arrive
+           here.)  Panic the kernel to make the point.  */
+        intr_dump_frame (f);
+      PANIC ("Kernel bug - unexpected interrupt in kernel");
 
-    default:
-      /* Some other code segment?  
-         Shouldn't happen.  Panic the kernel. */
-      printf ("Interrupt %#04x (%s) in unknown segment %04x\n",
-             f->vec_no, intr_name (f->vec_no), f->cs);
+      default:
+        /* Some other code segment?
+           Shouldn't happen.  Panic the kernel. */
+        printf ("Interrupt %#04x (%s) in unknown segment %04x\n",
+                f->vec_no, intr_name (f->vec_no), f->cs);
       PANIC ("Kernel bug - this shouldn't be possible!");
     }
 }
@@ -119,7 +125,7 @@ kill (struct intr_frame *f)
    description of "Interrupt 14--Page Fault Exception (#PF)" in
    [IA32-v3a] section 5.15 "Exception and Interrupt Reference". */
 static void
-page_fault (struct intr_frame *f) 
+page_fault (struct intr_frame *f)
 {
   bool not_present;  /* True: not-present page, false: writing r/o page. */
   bool write;        /* True: access was write, false: access was read. */
@@ -147,6 +153,55 @@ page_fault (struct intr_frame *f)
   write = (f->error_code & PF_W) != 0;
   user = (f->error_code & PF_U) != 0;
 
+  /* Page fault detected. */
+  if (not_present)
+    {
+      void *rounded_fault_page = pg_round_down (fault_addr);
+      struct sup_pagetable_entry *entry = sup_pagetable_entry_lookup (rounded_fault_page);
+
+      if (!entry)
+        {
+          void *user_esp = user ? f->esp : thread_current ()->user_esp;
+
+          /* Attempt to grow stack, exiting the page fault handler if successful. */
+          if (is_valid_stack_access (user_esp, fault_addr)
+              && grow_stack (rounded_fault_page))
+            {
+              return;
+            }
+
+          /* Either an invalid stack access was detected, or growing the stack
+             failed. */
+          f->cs = SEL_UCSEG;
+          kill (f);
+          NOT_REACHED()
+        }
+
+      /* Since an entry exists, we must either load from a file or from the
+         swap space. */
+      bool success = false;
+      switch (entry->state)
+        {
+          case All_ZERO:
+            success = sup_pagetable_load_all_zero (entry);
+          break;
+          case MMAP_FILE:
+          case FILE_SYSTEM:
+          case STACK:
+            success = sup_pagetable_load_file (entry);
+          break;
+          case SWAP_SLOT:
+            success = sup_pagetable_load_from_swap (entry);
+            break;
+        }
+
+      if (!success)
+        {
+          kill (f);
+        }
+      return;
+    }
+
   /* To implement virtual memory, delete the rest of the function
      body, and replace it with code that brings in the page to
      which fault_addr refers. */
@@ -158,3 +213,28 @@ page_fault (struct intr_frame *f)
   kill (f);
 }
 
+/* Attempt to determine if user pointer is a valid stack access or
+   a malicious pointer. */
+static bool
+is_valid_stack_access (void *user_esp, void *fault_addr)
+{
+  int32_t offset = user_esp - fault_addr;
+
+  return (-MAX_STACK_SPACE_IN_BYTES < offset) &&
+         (offset <= MAX_OFFSET_FROM_STACK_PTR_IN_BYTES);
+}
+
+/* Attempt to grow stack. */
+static bool
+grow_stack (void *user_addr_rounded)
+{
+  ASSERT (is_user_vaddr(user_addr_rounded));
+  struct frame *kframe = falloc_get_frame (true, STACK, user_addr_rounded, NULL, true, 0, 0);
+  if (!install_page (user_addr_rounded, kframe->kernel_page_addr, true))
+    {
+      falloc_free_frame (kframe);
+      return false;
+    }
+//    printf("grow: %p\n", user_addr_rounded);
+  return true;
+}
