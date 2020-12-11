@@ -1,6 +1,7 @@
 #include "mmap.h"
 #include <stdio.h>
 #include "filesys/file.h"
+#include "filesys/filesys.h"
 #include "threads/thread.h"
 #include "threads/vaddr.h"
 #include "threads/malloc.h"
@@ -73,6 +74,7 @@ memory_map (int fd, void *addr)
       if (sup_pagetable_entry_lookup (addr) != NULL)
         {
           // TODO free previously allocated sup. page table entries
+          memory_unmap (mmap_node->mapid);
           return MMAP_ERROR;
         }
 

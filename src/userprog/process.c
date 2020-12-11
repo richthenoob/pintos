@@ -13,7 +13,6 @@
 #include "threads/vaddr.h"
 #include "threads/malloc.h"
 
-#ifdef USERPROG
 #include "userprog/gdt.h"
 #include "userprog/pagedir.h"
 #include "userprog/tss.h"
@@ -21,13 +20,14 @@
 #include "userprog/filesys_wrapper.h"
 #include "vm/frame.h"
 #include "vm/page.h"
+#include "vm/mmap.h"
 #define MAX(a, b) (((a) > (b)) ? (a) : (b))
 #define MIN(a, b) (((a) < (b)) ? (a) : (b))
-#endif
 
 static thread_func start_process NO_RETURN;
 static bool load (const char *cmdline, void (**eip) (void), void **esp);
 static void free_frame (struct hash_elem *element, void *aux UNUSED);
+static void free_mmap_node (struct hash_elem *element, void *aux UNUSED);
 
 /* Locates a process in process_hashtable given a pid. Must hold process_lock
   before calling this function. */
@@ -315,6 +315,13 @@ process_exit_with_code (int exit_code)
     }
   lock_release (&process_lock);
 
+  hash_apply (&thread_current ()->mmap_hash_table, free_mmap_node);
+
+  /* Free all the frames used by this process. */
+  lock_acquire (&frametable_lock);
+  hash_destroy (&thread_current ()->sup_pagetable, free_frame);
+  lock_release (&frametable_lock);
+
   /* Close all files opened by this process and free hashtable memory. */
   lock_acquire (&filesys_lock);
   hash_destroy (&thread_current ()->hash_table_of_file_nodes, free_file_node);
@@ -332,16 +339,25 @@ process_exit_with_code (int exit_code)
   thread_exit ();
 }
 
+static void free_mmap_node (struct hash_elem *element, void *aux UNUSED)
+{
+  struct mmap_node *mmap_node = hash_entry (element,
+                                            struct mmap_node,
+                                            hash_elem);
+  syscall_munmap (mmap_node->mapid);
+}
+
 static void free_frame (struct hash_elem *element, void *aux UNUSED)
 {
   struct page_entry *entry = hash_entry (element,
                                          struct page_entry,
                                          spt_elem);
-  if (entry->frame_ptr != NULL) {
-    lock_acquire (&entry->frame_ptr->frame_lock);
-    falloc_free_frame (entry->frame_ptr);
-  }
-  hash_delete (&thread_current()->sup_pagetable, element);
+  if (entry->frame_ptr != NULL)
+    {
+      lock_acquire (&entry->frame_ptr->frame_lock);
+      falloc_free_frame (entry->frame_ptr);
+    }
+  hash_delete (&thread_current ()->sup_pagetable, element);
   free (entry);
 }
 

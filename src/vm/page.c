@@ -116,6 +116,10 @@ sup_pagetable_load_entry (struct page_entry *entry)
               + entry->read_bytes, 0, entry->zero_bytes);
     }
 
+    if (entry->curr_state == All_ZERO) {
+      memset (frame_ptr->kernel_page_addr, 0, PGSIZE);
+    }
+
   frame_ptr->pinned = false;
   lock_release (&frame_ptr->frame_lock);
 

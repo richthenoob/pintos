@@ -2,6 +2,7 @@
 #define USERPROG_SYSCALL_H
 
 #include <debug.h>
+#include <lib/user/syscall.h>
 #include "lib/kernel/hash.h"
 
 #define DEFAULT_ERR_EXIT_CODE (-1)
@@ -16,5 +17,6 @@ bool is_writable_segment (const uint8_t *fault_addr);
 int syscall_write (int fd, const void *buffer, unsigned length);
 void syscall_seek (int fd, unsigned position);
 unsigned syscall_tell (int fd);
+void syscall_munmap (mapid_t mapping);
 
 #endif /* userprog/syscall.h */

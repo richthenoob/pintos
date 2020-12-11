@@ -11,6 +11,7 @@
 #include "userprog/filesys_wrapper.h"
 #include "userprog/pagedir.h"
 #include "userprog/process.h"
+#include "userprog/syscall.h"
 #include "vm/swap.h"
 #include "vm/mmap.h"
 
@@ -51,11 +52,12 @@ falloc_get_frame (bool zero)
         {
           case MMAP_FILE:
             evict_frame_mmap (frame_ptr);
+          break;
           case FILE_SYSTEM:
           case All_ZERO:
           case STACK:
-            if (!pagedir_is_dirty (entry->owner_thread
-                                        ->pagedir, entry->user_page_addr))
+            if (!pagedir_is_dirty (entry->owner_thread->pagedir,
+                                   entry->user_page_addr))
               {
                 evict_frame_without_swap (frame_ptr);
               }
@@ -159,7 +161,7 @@ static void evict_frame_to_swap (struct frame *frame_ptr)
     {
       lock_release (&frame_ptr->frame_lock);
       lock_release (&frametable_lock);
-      process_exit_with_code (-1);
+      process_exit_with_code (DEFAULT_ERR_EXIT_CODE);
     }
 
   /* Modify other thread's page entry. */
@@ -183,13 +185,14 @@ evict_frame_without_swap (struct frame *frame_ptr)
   struct page_entry *entry = get_entry (frame_ptr);
   ASSERT (entry->curr_state != STACK)
   ASSERT (entry->curr_state != MMAP_FILE)
-  ASSERT (!pagedir_is_dirty (entry->owner_thread
-                                 ->pagedir, entry->user_page_addr));
+  ASSERT (!pagedir_is_dirty (entry->owner_thread->pagedir,
+                             entry->user_page_addr));
   entry->frame_ptr = NULL;
   list_remove (&entry->frame_elem);
 }
 
-static void evict_frame_mmap (struct frame *frame_ptr) {
+static void evict_frame_mmap (struct frame *frame_ptr)
+{
   ASSERT (lock_held_by_current_thread (&frametable_lock))
   ASSERT (lock_held_by_current_thread (&frame_ptr->frame_lock))
 

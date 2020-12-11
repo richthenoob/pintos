@@ -43,7 +43,7 @@ void syscall_seek (int fd, unsigned position);
 unsigned syscall_tell (int fd);
 static void syscall_close (int fd);
 static mapid_t syscall_mmap (int fd, void *addr);
-static void syscall_munmap (mapid_t mapping);
+void syscall_munmap (mapid_t mapping);
 
 /* Memory validation function.s */
 static bool user_memory_access_is_valid (void *user_ptr);
@@ -56,7 +56,6 @@ static int get_user (const uint8_t *uaddr);
 
 static void user_memory_string_unpin (void *user_ptr);
 static void user_memory_buffer_unpin (void *user_ptr, int32_t length);
-static void mmap_unmap (const struct hash_elem *p_, void *aux UNUSED);
 
 void
 syscall_init (void)
@@ -373,7 +372,7 @@ static mapid_t syscall_mmap (int fd, void *addr)
   return memory_map (fd, addr);
 }
 
-static void syscall_munmap (mapid_t mapping)
+void syscall_munmap (mapid_t mapping)
 {
   if (!memory_unmap (mapping))
     {
@@ -451,12 +450,6 @@ user_memory_string_unpin (void *user_ptr)
   ASSERT (string_length < PGSIZE + 1)
 
   user_memory_buffer_unpin (user_ptr, string_length);
-}
-
-static void mmap_unmap (const struct hash_elem *p_, void *aux UNUSED)
-{
-  const struct mmap_node *p = hash_entry(p_, struct mmap_node, hash_elem);
-  syscall_munmap (p->mapid);
 }
 
 bool
