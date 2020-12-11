@@ -271,6 +271,8 @@ static void free_all_children_process (void)
   struct process *p;
   struct hash_elem *returned_hash;
   struct list *child_list = &thread_current ()->child_processes_list;
+
+  /* iterate through list, deleting from the process hashtable */
   for (e = list_begin (child_list); e != list_end (child_list);)
     {
       p = list_entry (e, struct process, list_elem);
@@ -315,6 +317,7 @@ process_exit_with_code (int exit_code)
     }
   lock_release (&process_lock);
 
+  /* Free mmap table entries. */
   hash_apply (&thread_current ()->mmap_hash_table, free_mmap_node);
 
   /* Free all the frames used by this process. */
@@ -327,11 +330,6 @@ process_exit_with_code (int exit_code)
   hash_destroy (&thread_current ()->hash_table_of_file_nodes, free_file_node);
   lock_release (&filesys_lock);
 
-  /* Free all the frames used by this process. */
-  lock_acquire (&frametable_lock);
-  hash_destroy (&thread_current()->sup_pagetable, free_frame);
-  lock_release (&frametable_lock);
-
   /* Ensure that no locks are still held by this process. */
   ASSERT (!lock_held_by_current_thread (&process_lock))
   ASSERT (!lock_held_by_current_thread (&filesys_lock))
@@ -339,14 +337,19 @@ process_exit_with_code (int exit_code)
   thread_exit ();
 }
 
+/* Frees a thread's mmap_nodes, attempting to write back to disk only if
+   it has been modified. */
 static void free_mmap_node (struct hash_elem *element, void *aux UNUSED)
 {
   struct mmap_node *mmap_node = hash_entry (element,
                                             struct mmap_node,
                                             hash_elem);
   syscall_munmap (mmap_node->mapid);
+//  free (mmap_node);
 }
 
+/* Frees a page_entry. Only attempt to free its corresponding frame if exists
+   and is not shared by anyone else. */
 static void free_frame (struct hash_elem *element, void *aux UNUSED)
 {
   struct page_entry *entry = hash_entry (element,
@@ -356,6 +359,16 @@ static void free_frame (struct hash_elem *element, void *aux UNUSED)
     {
       lock_acquire (&entry->frame_ptr->frame_lock);
       falloc_free_frame (entry->frame_ptr);
+      /* Attempt at changing the owner of the frame in case of sharing */
+//      if (list_empty (&entry->frame_ptr->page_list))
+//        {​​​​
+//          falloc_free_frame (entry->frame_ptr);
+//        }​​​​
+//      else
+//      {​​​​
+//        list_pop_front (&entry->frame_ptr->page_list);
+//        lock_release (&entry->frame_ptr->frame_lock);
+//      }​​​​
     }
   hash_delete (&thread_current ()->sup_pagetable, element);
   free (entry);

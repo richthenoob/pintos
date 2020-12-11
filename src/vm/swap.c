@@ -14,6 +14,8 @@ struct block *block_device;
 void swap_init ()
 {
   block_device = block_get_role (BLOCK_SWAP);
+
+  /* Create a bitmap with right number of bits. */
   uint32_t max_swap_slots = block_size (block_device) / SECTORS_PER_PAGE;
   swap_bit_map = bitmap_create (max_swap_slots);
 
@@ -30,7 +32,7 @@ void swap_init ()
   lock_init (&swap_lock);
 }
 
-/* Takes a frame and copies the data into a swap_entry,
+/* Takes a kernel address and copies the data into a swap_entry,
    then writes to swap space. Note that this function does NOT handle removing
    a page entry from the process's pagedir, so be sure to do that. */
 int insert_swap (void *kernel_pg_addr)
@@ -57,15 +59,11 @@ int insert_swap (void *kernel_pg_addr)
   return index;
 }
 
-/* Writes to a given frame the entry we stored earlier, and restores the
-   frame data as well. This function only modifies the frame and the
-   kernel address it points to, so remember to update information about the
-   frame somewhere else (e.g. adding to a thread's frame list, installing
-   the page.) */
+/* Writes to a given kernel address the entry we stored earlier. Take note that we
+   still need to restore infomation about the frame */
 bool read_swap (int index, void *kernel_pg_addr)
 {
   ASSERT (is_kernel_vaddr (kernel_pg_addr))
-  /* Ensure that other processes don't try to access a wrong frame. */
 
   /* Retrieve back the frame table information. */
   lock_acquire (&swap_lock);

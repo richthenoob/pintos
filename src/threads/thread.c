@@ -143,7 +143,9 @@ thread_start (void)
 #ifdef USERPROG
   hash_init (&process_hashtable, process_hash, process_less, NULL);
   lock_init (&process_lock);
-  lock_init (&frametable_lock);
+#endif
+
+#ifdef VM
   list_init (&all_frames);
   lock_init (&frametable_lock);
 #endif
@@ -248,8 +250,11 @@ thread_create (const char *name, int priority,
 #ifdef USERPROG
   /* Initialise the hash table for file descriptors. */
   hash_init (&(t->hash_table_of_file_nodes), file_node_hash, file_node_less, NULL);
-  /* Initialise the supplementary page table. */
-  hash_init (&t->sup_pagetable, sup_page_hash, sup_page_cmp, NULL); //TODO: standardize names
+#endif
+
+#ifdef VM
+/* Initialise the supplementary page table. */
+  hash_init (&t->sup_pagetable, sup_page_hash, sup_page_cmp, NULL);
   /* Initialise the mmap node hash table. */
   hash_init (&t->mmap_hash_table, mmap_hash, mmap_cmp, NULL);
 #endif

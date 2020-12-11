@@ -99,18 +99,18 @@ struct thread {
 
 #ifdef USERPROG
   /* Owned by userprog/process.c. */
-  uint32_t *pagedir;                  /* Page directory. */
-  struct list child_processes_list;   /* List of processes this thread has
+  uint32_t *pagedir;                    /* Page directory. */
+  struct list child_processes_list;     /* List of processes this thread has
                                            spawned using exec. */
   struct hash hash_table_of_file_nodes; /* Hash table for file nodes. */
 #endif
 
 #ifdef VM
-  uint32_t *user_esp;
-  uint8_t *start_writable_segment_addr;
-  uint8_t *end_writable_segment_addr;
-  struct hash sup_pagetable;     /* Supplementary page table. */
-  struct hash mmap_hash_table;   /* Hash table of memory mapped files. */
+  uint32_t *user_esp;                   /* Store user esp if a page fault occurs within syscall handlers. */
+  uint8_t *start_writable_segment_addr; /* Start of data segment. */
+  uint8_t *end_writable_segment_addr;   /* End of data segment. */
+  struct hash sup_pagetable;            /* Supplementary page table. */
+  struct hash mmap_hash_table;          /* Hash table of memory mapped files. */
 #endif
 
   /* Owned by thread.c. */
