@@ -1,8 +1,11 @@
 #ifndef VM_MMAP_H
 #define VM_MMAP_H
 
+#include "filesys/off_t.h"
 #include "lib/user/syscall.h"
 #include "lib/kernel/hash.h"
+
+#define MMAP_ERROR (-1)
 
 struct mmap_node {
   struct hash_elem hash_elem;
@@ -14,6 +17,7 @@ struct mmap_node {
 mapid_t memory_map (int fd, void *addr);
 bool memory_unmap (mapid_t mapping);
 struct mmap_node *mmap_node_lookup (mapid_t id);
+bool write_page_back_to_file(int fd, off_t ofs, void *user_page_addr, uint32_t write_bytes);
 
 /* Helper functions. */
 mapid_t next_mapid_value (void);

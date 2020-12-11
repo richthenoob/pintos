@@ -111,8 +111,6 @@ struct thread {
   uint8_t *end_writable_segment_addr;
   struct hash sup_pagetable;     /* Supplementary page table. */
   struct hash mmap_hash_table;   /* Hash table of memory mapped files. */
-  struct list frame_list;        /* List of frames this thread holds. */
-  struct list_elem frame_elem;
 #endif
 
   /* Owned by thread.c. */

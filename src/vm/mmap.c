@@ -1,4 +1,5 @@
 #include "mmap.h"
+#include <stdio.h>
 #include "filesys/file.h"
 #include "threads/thread.h"
 #include "threads/vaddr.h"
@@ -8,30 +9,27 @@
 #include "userprog/pagedir.h"
 #include "vm/page.h"
 
-bool write_page_back_to_file(int fd, off_t ofs,
-                             void *user_page_addr, uint32_t write_bytes);
-
 mapid_t
 memory_map (int fd, void *addr)
 {
  /* Check if the input of fd and addr are valid. */
-  if (addr == 0 || fd < 2 || (uint32_t) addr % PGSIZE != 0)
+  if (addr == 0 || fd <= STDOUT_FILENO || (uint32_t) addr % PGSIZE != 0)
     {
-      return -1;
+      return MMAP_ERROR;
     }
 
  /* Open the file. */
   struct file_node *file_node = file_node_lookup (fd);
   if (!file_node || !file_node->file)
     {
-      return -1;
+      return MMAP_ERROR;
     }
   lock_acquire (&filesys_lock);
   struct file *file = file_reopen (file_node->file);
   lock_release (&filesys_lock);
   if (file == NULL)
     {
-      return -1;
+      return MMAP_ERROR;
     }
 
   lock_acquire (&filesys_lock);
@@ -41,7 +39,7 @@ memory_map (int fd, void *addr)
   /* Fail if the file opened has a length of zero bytes. */
   if (length == 0)
     {
-      return -1;
+      return MMAP_ERROR;
     }
 
   /* Assign a mmapid and push mmap_node into the hash table. */
@@ -68,28 +66,21 @@ memory_map (int fd, void *addr)
     {
       /* Page exists in the thread's page directory, so we are potentially
          overwriting some data. */
-      if (pagedir_get_page (thread_current ()->pagedir, addr) != 0)
+      if (pagedir_get_page (thread_current ()->pagedir, addr) != NULL)
         {
-          return -1;
+          return MMAP_ERROR;
         }
       if (sup_pagetable_entry_lookup (addr) != NULL)
         {
           // TODO free previously allocated sup. page table entries
-          return -1;
+          return MMAP_ERROR;
         }
 
-      struct sup_pagetable_entry *entry;
+      struct page_entry *entry;
       size_t page_read_bytes = read_bytes < PGSIZE ? read_bytes : PGSIZE;
       size_t page_zero_bytes = PGSIZE - page_read_bytes;
 
-      if (page_zero_bytes == PGSIZE)
-        {
-          entry = sup_pagetable_add_all_zero (addr, true, file);
-        }
-      else
-        {
-          entry = sup_pagetable_add_file (thread_current(), MMAP_FILE, addr, file, ofs, read_bytes, zero_bytes, true);
-        }
+      entry = add_to_sup_pagetable (addr, MMAP_FILE, file, ofs, read_bytes, zero_bytes, true);
 
       ofs += page_read_bytes;
       read_bytes -= page_read_bytes;
@@ -113,23 +104,23 @@ bool memory_unmap (mapid_t mapping) {
     }
 
   struct list_elem *e;
-  struct sup_pagetable_entry *spe;
+  struct page_entry *entry;
   struct list *list_pages_open = &mmap_node->list_pages_open;
 
   for (e = list_begin (list_pages_open); e != list_end (list_pages_open);)
     {
-      spe = list_entry (e, struct sup_pagetable_entry, mmap_elem);
+      entry = list_entry (e, struct page_entry, mmap_elem);
       e = list_next (e);
 
       /* Write back to disk if page has been written to. */
-      if (pagedir_is_dirty (thread_current ()->pagedir, spe->upage))
+      if (pagedir_is_dirty (thread_current ()->pagedir, entry->user_page_addr))
         {
-          write_page_back_to_file(mmap_node->fd, spe->ofs, &spe->upage, spe->read_bytes);
+          write_page_back_to_file(mmap_node->fd, entry->ofs, &entry->user_page_addr, entry->read_bytes);
         }
 
       /* Remove mapping from page directory and free the appropriate memory. */
-      pagedir_clear_page (thread_current ()->pagedir, spe->upage);
-      free_sup_page_entry (&spe->spt_elem, NULL);
+      pagedir_clear_page (thread_current ()->pagedir, entry->user_page_addr);
+      free_sup_page_entry (&entry->spt_elem, NULL);
     }
 
   /* Remove this mmap_node's link to its corresponding file_node. */

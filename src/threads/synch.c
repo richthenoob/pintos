@@ -245,6 +245,13 @@ lock_held_by_current_thread (const struct lock *lock)
 
   return lock->holder == thread_current ();
 }
+
+bool lock_not_held_by_any_thread (const struct lock *lock) {
+  ASSERT (lock != NULL)
+
+  return lock->holder == NULL;
+}
+
 
 /* One semaphore in a list. */
 struct semaphore_elem 

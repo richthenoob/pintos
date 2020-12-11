@@ -41,30 +41,9 @@ pagedir_destroy (uint32_t *pd)
         uint32_t *pt = pde_get_pt (*pde);
         uint32_t *pte;
 
-        for (pte = pt; pte < pt + PGSIZE / sizeof *pte; pte++)
-          if (*pte & PTE_P)
-            {
-              /* If another process is still using this frame, don't free
-                 the page, but decrement the counter instead. */
-              struct frame *f = frame_lookup (pte_get_page (*pte));
-              if (f != NULL)
-                {
-                  lock_acquire (&f->frame_lock);
-                  if (f->counter == 0)
-                    {
-                      palloc_free_page (pte_get_page (*pte));
-                    }
-                  else
-                    {
-                      f->counter -= 1;
-                      list_remove(&thread_current()->frame_elem);
-                      if (f->counter == 0) {
-                        f->pinned = false;
-                      }
-                    }
-                  lock_release (&f->frame_lock);
-                }
-            }
+//        for (pte = pt; pte < pt + PGSIZE / sizeof *pte; pte++)
+//          if (*pte & PTE_P)
+//            palloc_free_page (pte_get_page (*pte));
         palloc_free_page (pt);
       }
   palloc_free_page (pd);

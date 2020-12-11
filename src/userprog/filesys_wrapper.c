@@ -34,7 +34,7 @@ int add_to_hash_table_of_file_nodes (struct file *opened_file)
   struct file_node *node = malloc (sizeof (*node));
   if (node == NULL)
     {
-      process_exit_with_code (DEFAULT_ERR_EXIT_CODE);
+      return DEFAULT_ERR_EXIT_CODE;
     }
   node->file = opened_file;
   node->fd = next_fd_value ();

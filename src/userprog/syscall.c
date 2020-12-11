@@ -13,8 +13,10 @@
 #include "threads/thread.h"
 #include "threads/vaddr.h"
 #include "userprog/process.h"
+#include "userprog/pagedir.h"
 #include "userprog/filesys_wrapper.h"
-#include <vm/mmap.h>
+#include "vm/mmap.h"
+#include "vm/frame.h"
 
 #define SINGLE_ARG_SYSCALL_CUTOFF 9
 #define DOUBLE_ARG_SYSCALL_CUTOFF 12
@@ -46,10 +48,14 @@ static void syscall_munmap (mapid_t mapping);
 /* Memory validation function.s */
 static bool user_memory_access_is_valid (void *user_ptr);
 static bool
-user_memory_access_buffer_is_valid (void *user_ptr, int32_t length);
+user_memory_access_buffer_is_valid (void *user_ptr,
+                                    int32_t length,
+                                    bool read_only);
 static bool user_memory_access_string_is_valid (void *user_ptr);
 static int get_user (const uint8_t *uaddr);
 
+static void user_memory_string_unpin (void *user_ptr);
+static void user_memory_buffer_unpin (void *user_ptr, int32_t length);
 static void mmap_unmap (const struct hash_elem *p_, void *aux UNUSED);
 
 void
@@ -141,7 +147,7 @@ static int double_arg_syscall (int syscall_no, void *arg1, void *arg2)
         return syscall_create ((const char *) arg1, *(unsigned *) arg2);
       case SYS_SEEK:
         syscall_seek (*(int *) arg1, *(unsigned *) arg2);
-        return 0;
+      return 0;
       case SYS_MMAP:
         return syscall_mmap (*(int *) arg1, (void *) *(int32_t *) arg2);
       default:
@@ -176,15 +182,19 @@ static void syscall_exit (int exit_code)
 static pid_t syscall_exec (const char *file)
 {
   char *file_ptr = *(char **) file;
+  tid_t child_tid;
 
   if (user_memory_access_string_is_valid (file_ptr))
     {
-      return process_execute (file_ptr);
+      child_tid = process_execute (file_ptr);
     }
   else
     {
-      return TID_ERROR;
+      child_tid = TID_ERROR;
     }
+
+  user_memory_string_unpin (file_ptr);
+  return child_tid;
 }
 
 static int syscall_wait (pid_t pid)
@@ -207,6 +217,7 @@ static bool syscall_create (const char *file, unsigned initial_size)
   lock_acquire (&filesys_lock);
   bool success = filesys_create (file_ptr, initial_size);
   lock_release (&filesys_lock);
+  user_memory_string_unpin (file_ptr);
   return success;
 }
 
@@ -220,6 +231,7 @@ static bool syscall_remove (const char *file)
   lock_acquire (&filesys_lock);
   bool success = filesys_remove (file_ptr);
   lock_release (&filesys_lock);
+  user_memory_string_unpin (file_ptr);
   return success;
 }
 
@@ -230,14 +242,17 @@ static int syscall_open (const char *file)
     {
       syscall_exit (DEFAULT_ERR_EXIT_CODE);
     }
+
   lock_acquire (&filesys_lock);
   struct file *opened_file = filesys_open (file_ptr);
   lock_release (&filesys_lock);
-  if (!opened_file)
-    {
-      return DEFAULT_ERR_EXIT_CODE;
-    }
-  return add_to_hash_table_of_file_nodes (opened_file);
+
+  int fd = opened_file
+           ? add_to_hash_table_of_file_nodes (opened_file)
+           : DEFAULT_ERR_EXIT_CODE;
+
+  user_memory_string_unpin (file_ptr);
+  return fd;
 }
 
 static int syscall_filesize (int fd)
@@ -257,12 +272,14 @@ static int syscall_read (int fd, void *buffer, unsigned length)
 {
   char *buffer_ptr = *(char **) (buffer);
   struct file_node *file_node = file_node_lookup (fd);
+
   if (!user_memory_access_is_valid (buffer_ptr)
       || file_node == NULL
-      || !user_memory_access_buffer_is_valid (buffer_ptr, length))
+      || !user_memory_access_buffer_is_valid (buffer_ptr, length, false))
     {
       syscall_exit (DEFAULT_ERR_EXIT_CODE);
     }
+
   int read_length;
   switch (fd)
     {
@@ -278,14 +295,16 @@ static int syscall_read (int fd, void *buffer, unsigned length)
       lock_release (&filesys_lock);
     }
 
+  user_memory_buffer_unpin (buffer_ptr, length);
   return read_length;
 }
 
 int syscall_write (int fd, const void *buffer, unsigned length)
 {
   char *buffer_ptr = *(char **) (buffer);
+
   if (!user_memory_access_is_valid (buffer_ptr)
-      || !user_memory_access_is_valid (buffer_ptr + length))
+      || !user_memory_access_buffer_is_valid (buffer_ptr, length, true))
     {
       syscall_exit (DEFAULT_ERR_EXIT_CODE);
     }
@@ -307,6 +326,8 @@ int syscall_write (int fd, const void *buffer, unsigned length)
       bytes_written = 0;
     }
   lock_release (&filesys_lock);
+
+  user_memory_buffer_unpin (buffer_ptr, length);
   return bytes_written;
 }
 
@@ -349,14 +370,15 @@ static void syscall_close (int fd)
 
 static mapid_t syscall_mmap (int fd, void *addr)
 {
-  return memory_map(fd, addr);
+  return memory_map (fd, addr);
 }
 
 static void syscall_munmap (mapid_t mapping)
 {
-  if (!memory_unmap(mapping)) {
-    process_exit_with_code(DEFAULT_ERR_EXIT_CODE);
-  }
+  if (!memory_unmap (mapping))
+    {
+      process_exit_with_code (DEFAULT_ERR_EXIT_CODE);
+    }
 }
 
 /* ---------------- MEMORY CHECK FUNCTIONS ---------------- */
@@ -365,25 +387,34 @@ static void syscall_munmap (mapid_t mapping)
 static bool
 user_memory_access_is_valid (void *user_ptr)
 {
-  return user_ptr != NULL &&
-         is_user_vaddr (user_ptr) &&
-         get_user ((uint8_t *) user_ptr) != -1;
+  bool success = user_ptr != NULL && is_user_vaddr (user_ptr);
+
+  /* Attempt to pin page. */
+  if (success && get_user ((uint8_t *) user_ptr) != -1)
+    {
+      frame_change_pinned (user_ptr, true);
+    }
+  return success;
 }
 
-/* Check that buffer can be written to and is a valid user address. */
+/* Go through the whole buffer, attempting to fault the page in if it does
+   not exists (using get_user). */
 static bool
-user_memory_access_buffer_is_valid (void *user_ptr, int32_t length)
+user_memory_access_buffer_is_valid (void *user_ptr,
+                                    int32_t length,
+                                    bool read_only)
 {
   bool success = user_memory_access_is_valid (user_ptr + length);
 
   do
     {
       success = success &&
-                is_writable_segment (user_ptr + length) &&
+                (read_only || is_writable_segment (user_ptr + length)) &&
                 get_user ((uint8_t *) user_ptr + length) != -1;
+      frame_change_pinned (user_ptr + length, true);
       length -= PGSIZE;
     }
-  while (success && length > PGSIZE);
+  while (success && length > 0);
 
   return success;
 }
@@ -397,6 +428,29 @@ user_memory_access_string_is_valid (void *user_ptr)
   return string_length < PGSIZE + 1
          && user_memory_access_is_valid (user_ptr)
          && user_memory_access_is_valid (user_ptr + string_length);
+}
+
+/* Goes through all the pages the buffer resides on, unpinning them. */
+static void
+user_memory_buffer_unpin (void *user_ptr, int32_t length) {
+  ASSERT (user_ptr != NULL)
+
+  do {
+    ASSERT (pagedir_get_page (thread_current ()->pagedir, user_ptr) != NULL)
+    frame_change_pinned (user_ptr + length, false);
+    length -= PGSIZE;
+  } while (length > PGSIZE);
+}
+
+/* Unpins the page(s) a user string is stored on. Ensures that we are unpinning
+   all the pages the string uses. */
+static void
+user_memory_string_unpin (void *user_ptr)
+{
+  long string_length = strnlen (user_ptr, PGSIZE);
+  ASSERT (string_length < PGSIZE + 1)
+
+  user_memory_buffer_unpin (user_ptr, string_length);
 }
 
 static void mmap_unmap (const struct hash_elem *p_, void *aux UNUSED)

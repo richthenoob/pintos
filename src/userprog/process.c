@@ -27,7 +27,7 @@
 
 static thread_func start_process NO_RETURN;
 static bool load (const char *cmdline, void (**eip) (void), void **esp);
-static void free_frames (void);
+static void free_frame (struct hash_elem *element, void *aux UNUSED);
 
 /* Locates a process in process_hashtable given a pid. Must hold process_lock
   before calling this function. */
@@ -321,36 +321,28 @@ process_exit_with_code (int exit_code)
   lock_release (&filesys_lock);
 
   /* Free all the frames used by this process. */
-  free_frames ();
-
-  /* Free thread's supplemental page table entries. */
-  hash_destroy (&thread_current ()->sup_pagetable, free_sup_page_entry);
+  lock_acquire (&frametable_lock);
+  hash_destroy (&thread_current()->sup_pagetable, free_frame);
+  lock_release (&frametable_lock);
 
   /* Ensure that no locks are still held by this process. */
-  ASSERT (!lock_held_by_current_thread (&process_lock));
-  ASSERT (!lock_held_by_current_thread (&filesys_lock));
+  ASSERT (!lock_held_by_current_thread (&process_lock))
+  ASSERT (!lock_held_by_current_thread (&filesys_lock))
+  ASSERT (!lock_held_by_current_thread (&frametable_lock))
   thread_exit ();
 }
 
-static void free_frames (void)
+static void free_frame (struct hash_elem *element, void *aux UNUSED)
 {
-  struct list *frame_list = &thread_current ()->frame_list;
-  struct list_elem *e;
-  struct frame *f;
-  for (e = list_begin (frame_list); e != list_end (frame_list);)
-    {
-      f = list_entry (e, struct frame, thread_frame_list_elem);
-      e = list_next (e);
-      if (f->counter == 0)
-        {
-          falloc_free_frame (f);
-        }
-      else
-        {
-          struct list_elem *next_owner_elem = list_pop_front (&f->threads_users);
-          f->owner = list_entry(next_owner_elem, struct thread, frame_elem);
-        }
-    }
+  struct page_entry *entry = hash_entry (element,
+                                         struct page_entry,
+                                         spt_elem);
+  if (entry->frame_ptr != NULL) {
+    lock_acquire (&entry->frame_ptr->frame_lock);
+    falloc_free_frame (entry->frame_ptr);
+  }
+  hash_delete (&thread_current()->sup_pagetable, element);
+  free (entry);
 }
 
 /* Free the current process's resources. */
@@ -693,25 +685,27 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
 
       if (page_zero_bytes == PGSIZE)
         {
-          sup_pagetable_add_all_zero (upage, writable, file);
+          add_to_sup_pagetable (upage, All_ZERO, file, ofs,
+                                read_bytes, zero_bytes, writable);
         }
       else
         {
-          struct sup_pagetable_entry *entry = sup_pagetable_entry_lookup (upage);
+          struct page_entry *entry = sup_pagetable_entry_lookup (upage);
           if (entry != NULL)
             {
               /* Loading of segments onto same page, so update entry and
                  re-insert into supplemental page table. */
-              ASSERT (entry->upage == upage)
+              ASSERT (entry->user_page_addr == upage)
               ASSERT (entry->file == file)
-              ofs = MAX (ofs, entry->ofs);
+              ofs = MIN (ofs, entry->ofs);
               page_read_bytes = MAX(page_read_bytes, entry->read_bytes);
               page_zero_bytes = MIN(page_zero_bytes, entry->zero_bytes);
               writable = writable || entry->writable;
               free_sup_page_entry (&entry->spt_elem, NULL);
             }
-          sup_pagetable_add_file (thread_current (), FILE_SYSTEM, upage, file, ofs,
-                                  page_read_bytes, page_zero_bytes, writable);
+
+          add_to_sup_pagetable (upage, FILE_SYSTEM, file, ofs,
+                                page_read_bytes, page_zero_bytes, writable);
         }
 
       ofs += page_read_bytes;
@@ -727,21 +721,13 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
 static bool
 setup_stack (void **esp)
 {
-  struct frame *kframe;
-  bool success = false;
+  bool success = grow_stack (((uint8_t *) PHYS_BASE) - PGSIZE);
 
-  kframe = falloc_get_frame (true, STACK,
-                             ((uint8_t *) PHYS_BASE)
-                             - PGSIZE, NULL, false, 0, 0);
-  if (kframe != NULL)
+  if (success)
     {
-      success = install_page (
-          ((uint8_t *) PHYS_BASE) - PGSIZE, kframe->kernel_page_addr, true);
-      if (success)
-        *esp = PHYS_BASE;
-      else
-        falloc_free_frame (kframe);
+      *esp = PHYS_BASE;
     }
+
   return success;
 }
 

@@ -91,21 +91,6 @@ process_less (const struct hash_elem *a_, const struct hash_elem *b_,
   return a->pid < b->pid;
 }
 
-static unsigned frame_hash (const struct hash_elem *f_, void *aux UNUSED)
-{
-  struct frame *f = hash_entry (f_, struct frame, hash_elem);
-  return hash_bytes (&f->kernel_page_addr, sizeof (f->kernel_page_addr));
-}
-
-static bool
-frame_less (const struct hash_elem *a_, const struct hash_elem *b_,
-            void *aux UNUSED)
-{
-  struct frame *a = hash_entry (a_, struct frame, hash_elem);
-  struct frame *b = hash_entry (b_, struct frame, hash_elem);
-  return a->kernel_page_addr < b->kernel_page_addr;
-}
-
 /* Initializes the threading system by transforming the code
    that's currently running into a thread.  This can't work in
    general and it is possible in this case only because loader.S
@@ -158,10 +143,9 @@ thread_start (void)
 #ifdef USERPROG
   hash_init (&process_hashtable, process_hash, process_less, NULL);
   lock_init (&process_lock);
-  hash_init (&frametable, frame_hash, frame_less, NULL);
   lock_init (&frametable_lock);
   list_init (&all_frames);
-  lock_init (&all_frames_lock);
+  lock_init (&frametable_lock);
 #endif
 }
 
@@ -268,8 +252,6 @@ thread_create (const char *name, int priority,
   hash_init (&t->sup_pagetable, sup_page_hash, sup_page_cmp, NULL); //TODO: standardize names
   /* Initialise the mmap node hash table. */
   hash_init (&t->mmap_hash_table, mmap_hash, mmap_cmp, NULL);
-  /* Initialise the frame list. */
-  list_init (&t->frame_list);
 #endif
 
   /* Add to run queue. */
