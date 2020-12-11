@@ -33,6 +33,7 @@ add_to_sup_pagetable (void *user_page_addr, enum page_state state,
   entry->swap_index = SWAP_ERROR;
   entry->is_dirty = false;
   entry->mmap_fd = MMAP_ERROR;
+  lock_init (&entry->page_lock);
 
   /* Add the page to the supplemental page table. */
   hash_insert (&thread_current ()->sup_pagetable, &entry->spt_elem);
@@ -84,7 +85,9 @@ sup_pagetable_load_entry (struct page_entry *entry)
       return false;
     }
 
+  lock_acquire (&filesys_lock);
   lock_acquire (&frame_ptr->frame_lock);
+  lock_acquire (&entry->page_lock);
   /* Add the page to the process's address space. */
   if (!install_page (entry->user_page_addr, frame_ptr->kernel_page_addr, entry
       ->writable))
@@ -102,7 +105,6 @@ sup_pagetable_load_entry (struct page_entry *entry)
   /* Load data into the page. */
   if (entry->curr_state == FILE_SYSTEM || entry->curr_state == MMAP_FILE)
     {
-      lock_acquire (&filesys_lock);
       file_seek (entry->file, entry->ofs);
       if (file_read (entry->file, frame_ptr->kernel_page_addr, entry->read_bytes)
           != (int) entry->read_bytes)
@@ -111,7 +113,6 @@ sup_pagetable_load_entry (struct page_entry *entry)
           falloc_free_frame (frame_ptr);
           return false;
         }
-      lock_release (&filesys_lock);
 
       memset (frame_ptr->kernel_page_addr
               + entry->read_bytes, 0, entry->zero_bytes);
@@ -126,7 +127,9 @@ sup_pagetable_load_entry (struct page_entry *entry)
   /* Unpin frame so other frames can evict it, since we are now done with
      reading from the filesystem. */
   frame_ptr->pinned = false;
+  lock_release (&entry->page_lock);
   lock_release (&frame_ptr->frame_lock);
+  lock_release (&filesys_lock);
 
   return true;
 }
@@ -140,6 +143,7 @@ static bool sup_pagetable_load_from_swap (struct page_entry *entry)
   /* Acquire a free frame to store page in. */
   struct frame *frame_ptr = falloc_get_frame (false);
   lock_acquire (&frame_ptr->frame_lock);
+  lock_acquire (&entry->page_lock);
 
   /* Copy data from swap space. */
   bool success = read_swap (entry->swap_index, frame_ptr->kernel_page_addr);
@@ -160,6 +164,7 @@ static bool sup_pagetable_load_from_swap (struct page_entry *entry)
   entry->is_dirty = false;
   entry->swap_index = SWAP_ERROR;
 
+  lock_release (&entry->page_lock);
   lock_release (&frame_ptr->frame_lock);
   return success;
 }
@@ -225,9 +230,11 @@ grow_stack (void *user_addr_rounded)
      page table and add the page to the frame's page_list. */
   struct page_entry *entry = add_to_sup_pagetable (user_addr_rounded, STACK,
                                                    NULL, -1, -1, -1, true);
+  lock_acquire (&entry->page_lock);
   entry->frame_ptr = frame_ptr;
   list_push_back (&frame_ptr->page_list, &entry->frame_elem);
 
+  lock_release (&entry->page_lock);
   lock_release (&frame_ptr->frame_lock);
   return true;
 }

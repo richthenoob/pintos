@@ -26,7 +26,7 @@
 
 static thread_func start_process NO_RETURN;
 static bool load (const char *cmdline, void (**eip) (void), void **esp);
-static void free_frame (struct hash_elem *element, void *aux UNUSED);
+static void free_page (struct hash_elem *element, void *aux UNUSED);
 static void free_mmap_node (struct hash_elem *element, void *aux UNUSED);
 
 /* Locates a process in process_hashtable given a pid. Must hold process_lock
@@ -322,7 +322,7 @@ process_exit_with_code (int exit_code)
 
   /* Free all the frames used by this process. */
   lock_acquire (&frametable_lock);
-  hash_destroy (&thread_current ()->sup_pagetable, free_frame);
+  hash_destroy (&thread_current ()->sup_pagetable, free_page);
   lock_release (&frametable_lock);
 
   /* Close all files opened by this process and free hashtable memory. */
@@ -345,12 +345,11 @@ static void free_mmap_node (struct hash_elem *element, void *aux UNUSED)
                                             struct mmap_node,
                                             hash_elem);
   syscall_munmap (mmap_node->mapid);
-//  free (mmap_node);
 }
 
 /* Frees a page_entry. Only attempt to free its corresponding frame if exists
    and is not shared by anyone else. */
-static void free_frame (struct hash_elem *element, void *aux UNUSED)
+static void free_page (struct hash_elem *element, void *aux UNUSED)
 {
   struct page_entry *entry = hash_entry (element,
                                          struct page_entry,
@@ -358,7 +357,9 @@ static void free_frame (struct hash_elem *element, void *aux UNUSED)
   if (entry->frame_ptr != NULL)
     {
       lock_acquire (&entry->frame_ptr->frame_lock);
+      lock_acquire (&entry->page_lock);
       falloc_free_frame (entry->frame_ptr);
+      list_remove (&entry->frame_elem);
       /* Attempt at changing the owner of the frame in case of sharing */
 //      if (list_empty (&entry->frame_ptr->page_list))
 //        {​​​​

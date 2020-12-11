@@ -304,6 +304,10 @@ static int syscall_filesize (int fd)
 
 static int syscall_read (int fd, void *buffer, unsigned length)
 {
+  if (length == 0) {
+      return 0;
+    }
+
   char *buffer_ptr = *(char **) (buffer);
   struct file_node *file_node = file_node_lookup (fd);
 
@@ -342,6 +346,10 @@ static int syscall_read (int fd, void *buffer, unsigned length)
 int syscall_write (int fd, const void *buffer, unsigned length)
 {
   char *buffer_ptr = *(char **) (buffer);
+
+  if (length == 0) {
+    return 0;
+  }
 
   /* Similar to syscall_read, we want to pre-load the pages in the buffer
      and pin the frames they are on, so that no other processes can evict the
@@ -459,15 +467,15 @@ user_memory_access_buffer_is_valid (void *user_ptr,
                                     int32_t length,
                                     bool read_only)
 {
-  bool success = user_memory_access_is_valid (pg_round_down (user_ptr) + length);
+  bool success = user_memory_access_is_valid (pg_round_down (user_ptr) + length - 1);
 
   do
     {
       /* Attempt to pin each frame after get_user faults in the page */
       success = success &&
                 (read_only || is_writable_segment (user_ptr + length)) &&
-                get_user ((uint8_t *) user_ptr + length) != -1;
-      frame_change_pinned (user_ptr + length, true);
+                get_user ((uint8_t *) user_ptr + length - 1) != -1;
+      frame_change_pinned (user_ptr + length - 1, true);
       length -= PGSIZE;
     }
   while (success && length > 0);
@@ -525,7 +533,7 @@ user_memory_buffer_unpin (void *user_ptr, int32_t length)
   do
     {
       ASSERT (pagedir_get_page (thread_current ()->pagedir, user_ptr) != NULL)
-      frame_change_pinned (user_ptr + length, false);
+      frame_change_pinned (user_ptr + length - 1, false);
       length -= PGSIZE;
     }
   while (length > PGSIZE);

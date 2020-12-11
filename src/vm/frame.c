@@ -43,6 +43,7 @@ falloc_get_frame (bool zero)
 
       lock_acquire (&frame_ptr->frame_lock);
       struct page_entry *entry = get_entry (frame_ptr);
+      lock_acquire (&entry->page_lock);
       pagedir_clear_page (entry->owner_thread->pagedir,
                           entry->user_page_addr);
 
@@ -71,7 +72,7 @@ falloc_get_frame (bool zero)
           default:
             PANIC ("Invalid state of next frame to evict. ");
         }
-      lock_release (&frame_ptr->frame_lock);
+      lock_release (&entry->page_lock);
     }
   else
     {
@@ -82,6 +83,8 @@ falloc_get_frame (bool zero)
       ASSERT (frame_ptr != NULL)
       frame_ptr->kernel_page_addr = kernel_page_addr;
       lock_init (&frame_ptr->frame_lock);
+      list_init (&frame_ptr->page_list);
+      lock_acquire (&frame_ptr->frame_lock);
       list_push_back (&all_frames, &frame_ptr->all_frame_list_elem);
     }
 
@@ -89,7 +92,13 @@ falloc_get_frame (bool zero)
      want to make it available to be evicted and remove previous owners in
      the page list. */
   frame_ptr->pinned = false;
-  list_init (&frame_ptr->page_list);
+
+  while (list_size (&frame_ptr->page_list) != 0)
+    {
+      list_pop_front (&frame_ptr->page_list);
+    }
+
+  lock_release (&frame_ptr->frame_lock);
   lock_release (&frametable_lock);
 
   return frame_ptr;
@@ -112,9 +121,11 @@ void frame_change_pinned (void *user_page_addr, bool pinned)
 {
   ASSERT (is_user_vaddr (user_page_addr))
 
-  struct frame *frame_ptr = sup_pagetable_entry_lookup (pg_round_down (user_page_addr))
-      ->frame_ptr;
+  struct page_entry *entry = sup_pagetable_entry_lookup (pg_round_down (user_page_addr));
+  lock_acquire (&entry->page_lock);
+  struct frame *frame_ptr = entry->frame_ptr;
   ASSERT (frame_ptr != NULL)
+  lock_release (&entry->page_lock);
 
   lock_acquire (&frame_ptr->frame_lock);
   frame_ptr->pinned = pinned;
@@ -175,10 +186,14 @@ static void evict_frame_to_swap (struct frame *frame_ptr)
   ASSERT (lock_held_by_current_thread (&frametable_lock))
   ASSERT (lock_held_by_current_thread (&frame_ptr->frame_lock))
 
+  struct page_entry *entry = get_entry (frame_ptr);
+  ASSERT (lock_held_by_current_thread (&entry->page_lock))
+
   /* Attempt to write to swap. This function is internally synchronized. */
   int swap_index = insert_swap (frame_ptr->kernel_page_addr);
   if (swap_index == BITMAP_ERROR)
     {
+      lock_release (&entry->page_lock);
       lock_release (&frame_ptr->frame_lock);
       lock_release (&frametable_lock);
       process_exit_with_code (DEFAULT_ERR_EXIT_CODE);
@@ -186,7 +201,6 @@ static void evict_frame_to_swap (struct frame *frame_ptr)
 
   /* Modify the original owner thread's page entry to store the relevant
      information, so that is loaded properly on the next page fault. */
-  struct page_entry *entry = get_entry (frame_ptr);
   ASSERT (entry->swap_index == -1)
   entry->prev_state = entry->curr_state;
   entry->curr_state = SWAP_SLOT;
@@ -194,7 +208,6 @@ static void evict_frame_to_swap (struct frame *frame_ptr)
   entry->is_dirty = pagedir_is_dirty (entry->owner_thread->pagedir,
                                       entry->user_page_addr);
   entry->frame_ptr = NULL;
-  list_remove (&entry->frame_elem);
 }
 
 /* Used to evict a frame, without writing to swap. */
@@ -205,12 +218,12 @@ evict_frame_without_swap (struct frame *frame_ptr)
   ASSERT (lock_held_by_current_thread (&frame_ptr->frame_lock))
 
   struct page_entry *entry = get_entry (frame_ptr);
+  ASSERT (lock_held_by_current_thread (&entry->page_lock))
   ASSERT (entry->curr_state != STACK)
   ASSERT (entry->curr_state != MMAP_FILE)
   ASSERT (!pagedir_is_dirty (entry->owner_thread->pagedir,
                              entry->user_page_addr));
   entry->frame_ptr = NULL;
-  list_remove (&entry->frame_elem);
 }
 
 /* Eviction for mmap that writes back to original mmap-ed file. Separate from
@@ -228,6 +241,7 @@ static void evict_frame_mmap (struct frame *frame_ptr)
       write_page_back_to_file (entry->mmap_fd, entry->ofs,
                                entry->user_page_addr, entry->read_bytes);
     }
+  entry->frame_ptr = NULL;
   /* If the page is not dirty, there is no need to write to file, and we
      can fault the page back in from the mmap file later on. */
 }
@@ -247,7 +261,10 @@ static struct frame *next_evicted (void)
     {
       frame_ptr = list_entry (e, struct frame, all_frame_list_elem);
       lock_acquire (&frame_ptr->frame_lock);
+
       entry = get_entry (frame_ptr);
+      lock_acquire (&entry->page_lock);
+
       curr_pagedir = entry->owner_thread->pagedir;
       if (!pagedir_is_accessed (curr_pagedir, entry->user_page_addr)
           && !frame_ptr->pinned)
@@ -255,6 +272,7 @@ static struct frame *next_evicted (void)
           /* Found eviction candidate, remove from list and return */
           list_remove (e);
           list_push_back (&all_frames, e);
+          lock_release (&entry->page_lock);
           lock_release (&frame_ptr->frame_lock);
           return frame_ptr;
         }
@@ -266,6 +284,7 @@ static struct frame *next_evicted (void)
           list_remove (temp);
           e = list_head (&all_frames);
           list_push_back (&all_frames, temp);
+          lock_release (&entry->page_lock);
           lock_release (&frame_ptr->frame_lock);
         }
     }

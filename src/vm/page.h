@@ -40,6 +40,7 @@ struct page_entry {
   bool is_dirty;               /* Stores dirty bit of page at the moment it
                                   was stored into swap. */
   int mmap_fd;                 /* Keeps track of file descriptor to load from mmap. */
+  struct lock page_lock;
 };
 
 /* Adding to supplemental page table. */
