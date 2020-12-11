@@ -14,7 +14,7 @@ void recurse_to_overflow(int count);
 void
 test_main (void)
 {
-  int i = 0;
+  int i = 1;
   recurse_count(i);
 }
 
@@ -31,7 +31,7 @@ void recurse_count(int count)
   msg ("grew stack %d times", count++);    
   
   // recurse (only print up to 30 times)
-  if(count < 30){
+  if(count <= 30){
     recurse_count(count);
   } else {
     recurse_to_overflow(count);

@@ -2,7 +2,6 @@
 #include <inttypes.h>
 #include <stdio.h>
 #include <threads/vaddr.h>
-#include <vm/page.h>
 #include "userprog/gdt.h"
 #include "threads/interrupt.h"
 #include "threads/thread.h"
@@ -16,6 +15,7 @@ static long long page_fault_cnt;
 
 static void kill (struct intr_frame *);
 static void page_fault (struct intr_frame *);
+static bool is_valid_stack_access (void *user_esp, void *fault_addr);
 
 /* Registers handlers for interrupts that can be caused by user
    programs.
@@ -89,9 +89,6 @@ kill (struct intr_frame *f)
       case SEL_UCSEG:
         /* User's code segment, so it's a user exception, as we
            expected.  Kill the user process.  */
-//      printf ("%s: dying due to interrupt %#04x (%s).\n",
-//              thread_name (), f->vec_no, intr_name (f->vec_no));
-//      intr_dump_frame (f);
         process_exit_with_code (-1);
       NOT_REACHED()
 
@@ -156,48 +153,32 @@ page_fault (struct intr_frame *f)
   if (not_present)
     {
       void *rounded_fault_page = pg_round_down (fault_addr);
-      struct sup_pagetable_entry *entry = sup_pagetable_entry_lookup (rounded_fault_page);
+      struct page_entry *entry = sup_pagetable_entry_lookup (rounded_fault_page);
 
       if (!entry)
         {
-          /* Attempt to determine if user pointer is a valid stack access or
-             a malicious pointer. */
           void *user_esp = user ? f->esp : thread_current ()->user_esp;
-          int32_t offset = user_esp - fault_addr;
 
-          if (-MAX_STACK_SPACE_IN_BYTES < offset &&
-              offset <= MAX_OFFSET_FROM_STACK_PTR_IN_BYTES)
+          /* Attempt to grow stack, exiting the page fault handler if successful. */
+          if (is_valid_stack_access (user_esp, fault_addr)
+              && grow_stack (rounded_fault_page))
             {
-              /* Attempt to grow stack. */
-              struct frame *kframe = falloc_get_frame (true, STACK, rounded_fault_page, NULL, true);
-              if (!install_page (rounded_fault_page, kframe->kernel_page_addr, true))
-                {
-                  falloc_free_frame (kframe);
-                }
               return;
             }
 
+          /* Either an invalid stack access was detected, or growing the stack
+             failed. */
+//          printf ("%s: dying due to interrupt %#04x (%s) with fault address %p.\n",
+//              thread_name (), f->vec_no, intr_name (f->vec_no), fault_addr);
+//          intr_dump_frame (f);
           f->cs = SEL_UCSEG;
           kill (f);
+          NOT_REACHED()
         }
 
-      /* Load the page from the file properly. */
-      bool success = false;
-      switch (entry->state)
-        {
-          case All_ZERO:
-            success = sup_pagetable_load_all_zero (entry);
-          break;
-          case MMAP_FILE:
-          case FILE_SYSTEM:
-            success = sup_pagetable_load_file (entry);
-          break;
-          case SWAP_SLOT:
-            // TODO: implement swap
-            break;
-        }
-
-      if (!success)
+      /* Since an entry exists, we must either load from a file or from the
+         swap space. */
+      if (!sup_pagetable_load_entry (entry))
         {
           kill (f);
         }
@@ -213,4 +194,15 @@ page_fault (struct intr_frame *f)
           write ? "writing" : "reading",
           user ? "user" : "kernel");
   kill (f);
+}
+
+/* Attempt to determine if user pointer is a valid stack access or
+   a malicious pointer. */
+static bool
+is_valid_stack_access (void *user_esp, void *fault_addr)
+{
+  int32_t offset = user_esp - fault_addr;
+
+  return (-MAX_STACK_SPACE_IN_BYTES < offset) &&
+         (offset <= MAX_OFFSET_FROM_STACK_PTR_IN_BYTES);
 }

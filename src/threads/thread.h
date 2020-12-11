@@ -7,8 +7,8 @@
 #include <hash.h>
 
 #ifdef USERPROG
-#include <lib/kernel/hash.h>
-#include "synch.h"
+#include "lib/kernel/hash.h"
+#include "threads/synch.h"
 #endif
 
 /* States in a thread's life cycle. */
@@ -97,29 +97,25 @@ struct thread {
   /* Shared between thread.c and synch.c. */
   struct list_elem elem;              /* List element. */
 
-  struct hash hash_table_of_file_nodes;
-  struct hash sup_pagetable;     /* Supplementary page table. */
-  struct hash mmap_hash_table;   /* Hash table of memory mapped files. */
-  struct list frame_list;
-
-/* Hash table for file nodes. */
 #ifdef USERPROG
   /* Owned by userprog/process.c. */
   uint32_t *pagedir;                  /* Page directory. */
   struct list child_processes_list;   /* List of processes this thread has
                                            spawned using exec. */
+  struct hash hash_table_of_file_nodes; /* Hash table for file nodes. */
+#endif
+
+#ifdef VM
   uint32_t *user_esp;
   uint8_t *start_writable_segment_addr;
   uint8_t *end_writable_segment_addr;
+  struct hash sup_pagetable;     /* Supplementary page table. */
+  struct hash mmap_hash_table;   /* Hash table of memory mapped files. */
 #endif
 
   /* Owned by thread.c. */
   unsigned magic;                     /* Detects stack overflow. */
 };
-
-struct hash process_hashtable;          /* Hashtable to store process structs. */
-struct lock filesys_lock;               /* Lock used over the entire filesystem. */
-struct lock process_lock;               /* Lock used before accessing process_hashtable.*/
 
 /* If false (default), use round-robin scheduler.
    If true, use multi-level feedback queue scheduler.

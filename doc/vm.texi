@@ -655,7 +655,7 @@ its mappings.
 
 If two or more processes map the same file, there is no requirement that
 they see consistent data.  Unix handles this by making the two mappings
-share the same physical page, but the @code{mmap} system call also has
+share the same physical page, but the Unix @code{mmap} system call also has
 an argument allowing the client to specify whether the page is shared or
 private (i.e.@: copy-on-write).
 

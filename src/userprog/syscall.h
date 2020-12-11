@@ -1,8 +1,8 @@
 #ifndef USERPROG_SYSCALL_H
 #define USERPROG_SYSCALL_H
 
-#include <lib/kernel/hash.h>
 #include <debug.h>
+#include "lib/kernel/hash.h"
 
 #define DEFAULT_ERR_EXIT_CODE (-1)
 #define MAX_STACK_SPACE_IN_BYTES (2000 * PGSIZE) /* 8MB of space*/
@@ -10,16 +10,11 @@
                                                    32 bytes from esp because of
                                                    how PUSHA works. */
 void syscall_init (void);
-
-struct file_node {
-  struct hash_elem hash_elem;
-  int fd;                           /* File descriptor. */
-  int mmap_count;                   /* Record the number of mapping. */
-  struct file *file;
-};
-
-int add_to_hash_table_of_file_nodes (struct file *opened_file);
-void free_file_node (struct hash_elem *element, void *aux);
 bool is_writable_segment (const uint8_t *fault_addr);
+
+/* Syscall functions that are needed by other kernel code. */
+int syscall_write (int fd, const void *buffer, unsigned length);
+void syscall_seek (int fd, unsigned position);
+unsigned syscall_tell (int fd);
 
 #endif /* userprog/syscall.h */

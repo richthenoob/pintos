@@ -28,6 +28,7 @@
 #include "userprog/gdt.h"
 #include "userprog/syscall.h"
 #include "userprog/tss.h"
+#include "vm/swap.h"
 #else
 #include "tests/threads/tests.h"
 #endif
@@ -37,7 +38,6 @@
 #include "filesys/filesys.h"
 #include "filesys/fsutil.h"
 #endif
-
 /* Page directory with kernel mappings only. */
 uint32_t *init_page_dir;
 
@@ -98,6 +98,7 @@ main (void)
   palloc_init (user_page_limit);
   malloc_init ();
   paging_init ();
+  random_init (42);
 
   /* Segmentation. */
 #ifdef USERPROG
@@ -126,6 +127,8 @@ main (void)
   locate_block_devices ();
   filesys_init (format_filesys);
 #endif
+
+  swap_init();
 
   printf ("Boot complete.\n");
   
