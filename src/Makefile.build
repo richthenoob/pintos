@@ -60,8 +60,9 @@ userprog_SRC += userprog/exception.c	# User exception handler.
 userprog_SRC += userprog/syscall.c	# System call handler.
 userprog_SRC += userprog/gdt.c		# GDT initialization.
 userprog_SRC += userprog/tss.c		# TSS management.
+userprog_SRC += userprog/filesys_wrapper.c # Filesystem interface.
 
-# No virtual memory code yet.
+# Virtual memory code
 vm_SRC = vm/frame.c			# Frame table handling.
 vm_SRC += vm/page.c			# Supplemental page table handling.
 vm_SRC += vm/swap.c			# Swap table handling.

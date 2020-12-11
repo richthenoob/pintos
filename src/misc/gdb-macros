@@ -19,6 +19,10 @@ define list_entry
     set $rc = ((struct $arg1 *) ((uint8_t *) ($arg0) - $rc))
 end
 
+define hash_entry
+    list_entry $arg0 $arg1 $arg2
+end
+
 # dump a Pintos list
 define dumplist
     set $list = $arg0
@@ -37,6 +41,35 @@ end
 document dumplist
     Dump the content of a Pintos list, 
     invoke as dumplist name_of_list name_of_struct name_of_elem_in_list_struct
+end
+
+# dump a Pintos hash_entry
+define dumphash
+    set $hash = $arg0
+    set $bkts = $hash.bucket_cnt
+    set $i = 0
+    while $i < $bkts
+        printf "pintos-debug: [hash bucket #%d]:\n", $i
+        set $list = &($hash.buckets[$i])
+        set $e = $list->head.next
+        set $j = 0
+        while $e != &($list.tail)
+            list_entry $e hash_elem list_elem
+            set $l = $rc
+            hash_entry $l $arg1 $arg2
+            set $h = $rc
+            printf "pintos-debug: bucket element #%d => %p \n", $j++, $h
+            output *$h
+            set $e = $e.next
+            printf "\n"
+        end
+        set $i = $i+1
+    end
+end
+
+document dumphash
+    Dump the contents of a Pintos hash, 
+    invoke as dumphash name_of_hash name_of_struct name_of_elem_in_hash_struct
 end
 
 # print a thread's backtrace, given a pointer to the struct thread *

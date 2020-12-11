@@ -5,6 +5,8 @@
 #include "threads/init.h"
 #include "threads/pte.h"
 #include "threads/palloc.h"
+#include "threads/thread.h"
+#include "vm/frame.h"
 
 static uint32_t *active_pd (void);
 static void invalidate_pagedir (uint32_t *);
@@ -21,9 +23,6 @@ pagedir_create (void)
     memcpy (pd, init_page_dir, PGSIZE);
   return pd;
 }
-
-#include <stdio.h>
-#include "vm/frame.h"
 
 /* Destroys page directory PD, freeing all the pages it
    references. */
@@ -42,26 +41,9 @@ pagedir_destroy (uint32_t *pd)
         uint32_t *pt = pde_get_pt (*pde);
         uint32_t *pte;
 
-        for (pte = pt; pte < pt + PGSIZE / sizeof *pte; pte++)
-          if (*pte & PTE_P)
-            {
-              /* If another process is still using this frame, don't free
-                 the page, but decrement the counter instead. */
-              struct frame *f = frame_lookup (pte_get_page (*pte));
-              if (f != NULL)
-                {
-                  lock_acquire (&f->frame_lock);
-                  if (f->counter == 0)
-                    {
-                      palloc_free_page (pte_get_page (*pte));
-                    }
-                  else
-                    {
-                      f->counter -= 1;
-                    }
-                  lock_release (&f->frame_lock);
-                }
-            }
+//        for (pte = pt; pte < pt + PGSIZE / sizeof *pte; pte++)
+//          if (*pte & PTE_P)
+//            palloc_free_page (pte_get_page (*pte));
         palloc_free_page (pt);
       }
   palloc_free_page (pd);

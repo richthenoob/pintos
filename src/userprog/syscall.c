@@ -2,32 +2,34 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <syscall-nr.h>
-#include <devices/shutdown.h>
-#include <filesys/filesys.h>
-#include <filesys/file.h>
-#include <threads/synch.h>
-#include <devices/input.h>
+#include "devices/shutdown.h"
+#include "devices/input.h"
+#include "lib/string.h"
+#include "filesys/filesys.h"
+#include "filesys/directory.h"
+#include "filesys/file.h"
+#include "threads/synch.h"
 #include "threads/interrupt.h"
 #include "threads/thread.h"
-#include "userprog/pagedir.h"
 #include "threads/vaddr.h"
 #include "userprog/process.h"
-#include "threads/malloc.h"
-#include "lib/string.h"
-#include "filesys/directory.h"
-#include <vm/page.h>
-#include <vm/mmap.h>
+#include "userprog/pagedir.h"
+#include "userprog/filesys_wrapper.h"
+#include "vm/mmap.h"
+#include "vm/frame.h"
 
 #define SINGLE_ARG_SYSCALL_CUTOFF 9
 #define DOUBLE_ARG_SYSCALL_CUTOFF 12
 #define TRIPLE_ARG_SYSCALL_CUTOFF 14
 
+/* Syscall handler/dispatcher. */
 static void syscall_handler (struct intr_frame *);
 static int single_arg_syscall (int syscall_no, void *arg1);
 static int double_arg_syscall (int syscall_no, void *arg1, void *arg2);
 static int triple_arg_syscall (int syscall_no, void *arg1,
                                void *arg2, void *arg3);
 
+/* Syscall functions. */
 static void syscall_exit (int exit_code) NO_RETURN;
 static pid_t syscall_exec (const char *file);
 static int syscall_wait (pid_t pid);
@@ -36,23 +38,25 @@ static bool syscall_remove (const char *file);
 static int syscall_open (const char *file);
 static int syscall_filesize (int fd);
 static int syscall_read (int fd, void *buffer, unsigned length);
-static int syscall_write (int fd, const void *buffer, unsigned length);
-static void syscall_seek (int fd, unsigned position);
-static unsigned syscall_tell (int fd);
+int syscall_write (int fd, const void *buffer, unsigned length);
+void syscall_seek (int fd, unsigned position);
+unsigned syscall_tell (int fd);
 static void syscall_close (int fd);
+static mapid_t syscall_mmap (int fd, void *addr);
+static void syscall_munmap (mapid_t mapping);
 
+/* Memory validation function.s */
 static bool user_memory_access_is_valid (void *user_ptr);
 static bool
-user_memory_access_buffer_is_valid (void *user_ptr, int32_t length);
+user_memory_access_buffer_is_valid (void *user_ptr,
+                                    int32_t length,
+                                    bool read_only);
 static bool user_memory_access_string_is_valid (void *user_ptr);
 static int get_user (const uint8_t *uaddr);
 
-static int next_fd_value (void);
-static struct file_node *file_node_lookup (int fd);
+static void user_memory_string_unpin (void *user_ptr);
+static void user_memory_buffer_unpin (void *user_ptr, int32_t length);
 static void mmap_unmap (const struct hash_elem *p_, void *aux UNUSED);
-
-static mapid_t syscall_mmap (int fd, void *p_void);
-static void syscall_munmap (mapid_t fd);
 
 void
 syscall_init (void)
@@ -132,6 +136,7 @@ static int single_arg_syscall (int syscall_no, void *arg1)
       default:
         syscall_exit (DEFAULT_ERR_EXIT_CODE);
     }
+  NOT_REACHED();
 }
 
 static int double_arg_syscall (int syscall_no, void *arg1, void *arg2)
@@ -142,12 +147,13 @@ static int double_arg_syscall (int syscall_no, void *arg1, void *arg2)
         return syscall_create ((const char *) arg1, *(unsigned *) arg2);
       case SYS_SEEK:
         syscall_seek (*(int *) arg1, *(unsigned *) arg2);
-      break;
+      return 0;
       case SYS_MMAP:
-        return syscall_mmap (*(int *) arg1, *(int *) arg2);
+        return syscall_mmap (*(int *) arg1, (void *) *(int32_t *) arg2);
       default:
         syscall_exit (DEFAULT_ERR_EXIT_CODE);
     }
+  NOT_REACHED();
 }
 
 static int triple_arg_syscall (int syscall_no, void *arg1,
@@ -162,6 +168,7 @@ static int triple_arg_syscall (int syscall_no, void *arg1,
       default:
         syscall_exit (DEFAULT_ERR_EXIT_CODE);
     }
+  NOT_REACHED();
 }
 
 /* ---------------- SYSCALL FUNCTIONS ---------------- */
@@ -175,15 +182,19 @@ static void syscall_exit (int exit_code)
 static pid_t syscall_exec (const char *file)
 {
   char *file_ptr = *(char **) file;
+  tid_t child_tid;
 
   if (user_memory_access_string_is_valid (file_ptr))
     {
-      return process_execute (file_ptr);
+      child_tid = process_execute (file_ptr);
     }
   else
     {
-      return TID_ERROR;
+      child_tid = TID_ERROR;
     }
+
+  user_memory_string_unpin (file_ptr);
+  return child_tid;
 }
 
 static int syscall_wait (pid_t pid)
@@ -206,6 +217,7 @@ static bool syscall_create (const char *file, unsigned initial_size)
   lock_acquire (&filesys_lock);
   bool success = filesys_create (file_ptr, initial_size);
   lock_release (&filesys_lock);
+  user_memory_string_unpin (file_ptr);
   return success;
 }
 
@@ -219,6 +231,7 @@ static bool syscall_remove (const char *file)
   lock_acquire (&filesys_lock);
   bool success = filesys_remove (file_ptr);
   lock_release (&filesys_lock);
+  user_memory_string_unpin (file_ptr);
   return success;
 }
 
@@ -229,14 +242,17 @@ static int syscall_open (const char *file)
     {
       syscall_exit (DEFAULT_ERR_EXIT_CODE);
     }
+
   lock_acquire (&filesys_lock);
   struct file *opened_file = filesys_open (file_ptr);
   lock_release (&filesys_lock);
-  if (!opened_file)
-    {
-      return DEFAULT_ERR_EXIT_CODE;
-    }
-  return add_to_hash_table_of_file_nodes (opened_file);
+
+  int fd = opened_file
+           ? add_to_hash_table_of_file_nodes (opened_file)
+           : DEFAULT_ERR_EXIT_CODE;
+
+  user_memory_string_unpin (file_ptr);
+  return fd;
 }
 
 static int syscall_filesize (int fd)
@@ -256,12 +272,14 @@ static int syscall_read (int fd, void *buffer, unsigned length)
 {
   char *buffer_ptr = *(char **) (buffer);
   struct file_node *file_node = file_node_lookup (fd);
+
   if (!user_memory_access_is_valid (buffer_ptr)
       || file_node == NULL
-      || !user_memory_access_buffer_is_valid (buffer_ptr, length))
+      || !user_memory_access_buffer_is_valid (buffer_ptr, length, false))
     {
       syscall_exit (DEFAULT_ERR_EXIT_CODE);
     }
+
   int read_length;
   switch (fd)
     {
@@ -277,14 +295,16 @@ static int syscall_read (int fd, void *buffer, unsigned length)
       lock_release (&filesys_lock);
     }
 
+  user_memory_buffer_unpin (buffer_ptr, length);
   return read_length;
 }
 
-static int syscall_write (int fd, const void *buffer, unsigned length)
+int syscall_write (int fd, const void *buffer, unsigned length)
 {
   char *buffer_ptr = *(char **) (buffer);
+
   if (!user_memory_access_is_valid (buffer_ptr)
-      || !user_memory_access_is_valid (buffer_ptr + length))
+      || !user_memory_access_buffer_is_valid (buffer_ptr, length, true))
     {
       syscall_exit (DEFAULT_ERR_EXIT_CODE);
     }
@@ -306,10 +326,12 @@ static int syscall_write (int fd, const void *buffer, unsigned length)
       bytes_written = 0;
     }
   lock_release (&filesys_lock);
+
+  user_memory_buffer_unpin (buffer_ptr, length);
   return bytes_written;
 }
 
-static void syscall_seek (int fd, unsigned position)
+void syscall_seek (int fd, unsigned position)
 {
   struct file_node *file_node = file_node_lookup (fd);
   if (file_node == NULL)
@@ -321,7 +343,7 @@ static void syscall_seek (int fd, unsigned position)
   lock_release (&filesys_lock);
 }
 
-static unsigned syscall_tell (int fd)
+unsigned syscall_tell (int fd)
 {
   struct file_node *file_node = file_node_lookup (fd);
   if (file_node == NULL)
@@ -348,136 +370,15 @@ static void syscall_close (int fd)
 
 static mapid_t syscall_mmap (int fd, void *addr)
 {
-
-  /* Check if the input of fd and addr are valid. */
-  if (addr == 0 || fd < 2 || (uint32_t) addr % PGSIZE != 0)
-    {
-      return -1;
-    }
-
-  /* Open the file. */
-  struct file_node *file_node = file_node_lookup (fd);
-  if (!file_node || !file_node->file)
-    {
-      return -1;
-    }
-  lock_acquire(&filesys_lock);
-  struct file *file = file_reopen (file_node->file);
-  lock_release(&filesys_lock);
-  if (file == NULL)
-    {
-      return -1;
-    }
-
-  lock_acquire(&filesys_lock);
-  off_t length = file_length (file);
-  lock_release(&filesys_lock);
-
-  /* Fail if the file opened has a length of zero bytes. */
-  if (length == 0)
-    {
-      return -1;
-    }
-
-  /* Assign a mmapid and push mmap_node into the hash table. */
-  struct mmap_node *mmap_node = (struct mmap_node *) malloc (sizeof (struct mmap_node));
-  mmap_node->mapid = next_mapid_value ();
-  mmap_node->fd = fd;
-  list_init (&mmap_node->list_pages_open);
-  hash_insert (&thread_current ()->mmap_hash_table, &mmap_node->hash_elem);
-  file_node->mmap_count += 1;
-
-  /* Determine the zero_bytes and the read_bytes. */
-  uint32_t read_bytes = length;
-  uint32_t zero_bytes = -1;
-  int n = 0;
-  while (n * PGSIZE < length)
-    {
-      ++n;
-    }
-  zero_bytes = n * PGSIZE - length;
-
-  /* Map into pages. */
-  off_t ofs = 0;
-  while (read_bytes > 0 || zero_bytes > 0)
-    {
-      if (pagedir_get_page (thread_current ()->pagedir, addr) != 0)
-        {
-          return -1;
-        }
-      if (sup_pagetable_entry_lookup (addr) != NULL)
-        {
-          // TODO free previously allocated sup. page table entries
-          return -1;
-        }
-
-      struct sup_pagetable_entry *entry;
-      size_t page_read_bytes = read_bytes < PGSIZE ? read_bytes : PGSIZE;
-      size_t page_zero_bytes = PGSIZE - page_read_bytes;
-
-      if (page_zero_bytes == PGSIZE)
-        {
-          entry = sup_pagetable_add_all_zero (addr, true, file);
-        }
-      else
-        {
-          entry = sup_pagetable_add_file (MMAP_FILE, addr, file, ofs, read_bytes, zero_bytes, true);
-        }
-
-      ofs += page_read_bytes;
-      read_bytes -= page_read_bytes;
-      zero_bytes -= page_zero_bytes;
-      addr += PGSIZE;
-
-      /* Add entry to this mmap node so that we can remove it accordingly
-         when the thread is terminated or when munmap is called. */
-      list_push_back (&mmap_node->list_pages_open, &entry->mmap_elem);
-    }
-
-  return mmap_node->mapid;
+  return memory_map (fd, addr);
 }
 
 static void syscall_munmap (mapid_t mapping)
 {
-  /* Check if the node is mapped. */
-  struct mmap_node *mmap_node = mmap_node_lookup (mapping);
-  if (mmap_node == NULL)
+  if (!memory_unmap (mapping))
     {
-      return;
+      process_exit_with_code (DEFAULT_ERR_EXIT_CODE);
     }
-
-  /* Store where the file pointer is before we write to it, so that we can
-     restore this information later on. */
-  unsigned initial_file_pos = syscall_tell (mmap_node->fd);
-
-  struct list_elem *e;
-  struct sup_pagetable_entry *spe;
-  struct list *list_pages_open = &mmap_node->list_pages_open;
-
-  for (e = list_begin (list_pages_open); e != list_end (list_pages_open);)
-    {
-      spe = list_entry (e, struct sup_pagetable_entry, mmap_elem);
-      e = list_next (e);
-
-      /* Write back to disk if page has been written to. */
-      if (pagedir_is_dirty (thread_current ()->pagedir, spe->upage))
-        {
-          syscall_write (mmap_node->fd, &spe->upage, spe->read_bytes);
-        }
-
-      /* Remove mapping from page directory and free the appropriate memory. */
-      pagedir_clear_page (thread_current ()->pagedir, spe->upage);
-      free_sup_page_entry (&spe->spt_elem, NULL);
-    }
-
-  /* Restore file pointer. */
-  syscall_seek (mmap_node->fd, initial_file_pos);
-
-  /* Remove this mmap_node's link to its corresponding file_node. */
-  file_node_lookup (mmap_node->fd)->mmap_count -= 1;
-
-  hash_delete (&thread_current ()->mmap_hash_table, &mmap_node->hash_elem);
-  free (mmap_node);
 }
 
 /* ---------------- MEMORY CHECK FUNCTIONS ---------------- */
@@ -486,25 +387,34 @@ static void syscall_munmap (mapid_t mapping)
 static bool
 user_memory_access_is_valid (void *user_ptr)
 {
-  return user_ptr != NULL &&
-         is_user_vaddr (user_ptr) &&
-         get_user ((uint8_t *) user_ptr) != -1;
+  bool success = user_ptr != NULL && is_user_vaddr (user_ptr);
+
+  /* Attempt to pin page. */
+  if (success && get_user ((uint8_t *) user_ptr) != -1)
+    {
+      frame_change_pinned (user_ptr, true);
+    }
+  return success;
 }
 
-/* Check that buffer can be written to and is a valid user address. */
+/* Go through the whole buffer, attempting to fault the page in if it does
+   not exists (using get_user). */
 static bool
-user_memory_access_buffer_is_valid (void *user_ptr, int32_t length)
+user_memory_access_buffer_is_valid (void *user_ptr,
+                                    int32_t length,
+                                    bool read_only)
 {
   bool success = user_memory_access_is_valid (user_ptr + length);
 
   do
     {
       success = success &&
-                is_writable_segment (user_ptr + length) &&
+                (read_only || is_writable_segment (user_ptr + length)) &&
                 get_user ((uint8_t *) user_ptr + length) != -1;
+      frame_change_pinned (user_ptr + length, true);
       length -= PGSIZE;
     }
-  while (success && length > PGSIZE);
+  while (success && length > 0);
 
   return success;
 }
@@ -520,54 +430,27 @@ user_memory_access_string_is_valid (void *user_ptr)
          && user_memory_access_is_valid (user_ptr + string_length);
 }
 
-/* ---------------- FILESYSTEM FUNCTIONS ---------------- */
+/* Goes through all the pages the buffer resides on, unpinning them. */
+static void
+user_memory_buffer_unpin (void *user_ptr, int32_t length) {
+  ASSERT (user_ptr != NULL)
 
-/* Returns next file descriptor value for a specific thread. No synchronization
-   needed since a thread only accesses its own hash table. */
-static int
-next_fd_value (void)
-{
-  return hash_size (&thread_current ()->hash_table_of_file_nodes)
-         + STDOUT_FILENO + 1;
+  do {
+    ASSERT (pagedir_get_page (thread_current ()->pagedir, user_ptr) != NULL)
+    frame_change_pinned (user_ptr + length, false);
+    length -= PGSIZE;
+  } while (length > PGSIZE);
 }
 
-/* Find a file node of the current thread's hash_table_of_file_nodes given a
-   file descriptor, fd. No synchronization needed since a thread only
-   accesses its own hash table. */
-static struct file_node *
-file_node_lookup (int fd)
+/* Unpins the page(s) a user string is stored on. Ensures that we are unpinning
+   all the pages the string uses. */
+static void
+user_memory_string_unpin (void *user_ptr)
 {
-  struct file_node fn;
-  struct hash_elem *e;
-  fn.fd = fd;
-  e = hash_find (&thread_current ()->hash_table_of_file_nodes, &fn.hash_elem);
-  return e != NULL ? hash_entry (e, struct file_node, hash_elem) : NULL;
-}
+  long string_length = strnlen (user_ptr, PGSIZE);
+  ASSERT (string_length < PGSIZE + 1)
 
-/* Add to current thread's hash_table_of_file_nodes. No synchronization needed. */
-int add_to_hash_table_of_file_nodes (struct file *opened_file)
-{
-  struct file_node *node = malloc (sizeof (*node));
-  if (node == NULL)
-    {
-      process_exit_with_code (DEFAULT_ERR_EXIT_CODE);
-    }
-  node->file = opened_file;
-  node->fd = next_fd_value ();
-  hash_insert (&(thread_current ()->hash_table_of_file_nodes), &node->hash_elem);
-  return node->fd;
-}
-
-/* Close file opened by this file_node and frees the malloc-ed struct. */
-void free_file_node (struct hash_elem *element, void *aux UNUSED)
-{
-  ASSERT (lock_held_by_current_thread (&filesys_lock));
-  struct file_node *fn = hash_entry (element,
-                                     struct file_node,
-                                     hash_elem);
-  file_close (fn->file);
-  hash_delete (&thread_current ()->hash_table_of_file_nodes, element);
-  free (fn);
+  user_memory_buffer_unpin (user_ptr, string_length);
 }
 
 static void mmap_unmap (const struct hash_elem *p_, void *aux UNUSED)
@@ -575,6 +458,7 @@ static void mmap_unmap (const struct hash_elem *p_, void *aux UNUSED)
   const struct mmap_node *p = hash_entry(p_, struct mmap_node, hash_elem);
   syscall_munmap (p->mapid);
 }
+
 bool
 is_writable_segment (const uint8_t *fault_addr)
 {

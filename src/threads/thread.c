@@ -14,11 +14,10 @@
 #include "threads/switch.h"
 #include "threads/synch.h"
 #include "threads/vaddr.h"
-#include "userprog/process.h"
-#include "vm/frame.h"
+
 #ifdef USERPROG
+#include "userprog/filesys_wrapper.h"
 #include "userprog/process.h"
-#include "threads/malloc.h"
 #include "vm/frame.h"
 #endif
 
@@ -77,25 +76,6 @@ static void schedule (void);
 void thread_schedule_tail (struct thread *prev);
 static tid_t allocate_tid (void);
 
-/* A few functions used to initialize process_hashtable and a
-   thread's hash_table_of_file_nodes. */
-static unsigned
-file_node_hash (const struct hash_elem *p_, void *aux UNUSED)
-{
-  const struct file_node *p = hash_entry (p_, struct file_node, hash_elem);
-  return hash_int (p->fd);
-}
-
-static bool
-file_node_less (const struct hash_elem *a_,
-                const struct hash_elem *b_,
-                void *aux UNUSED)
-{
-  const struct file_node *a = hash_entry (a_, struct file_node, hash_elem);
-  const struct file_node *b = hash_entry (b_, struct file_node, hash_elem);
-  return a->fd < b->fd;
-}
-
 static unsigned process_hash (const struct hash_elem *p_, void *aux UNUSED)
 {
   struct process *p = hash_entry (p_, struct process, hash_elem);
@@ -109,21 +89,6 @@ process_less (const struct hash_elem *a_, const struct hash_elem *b_,
   struct process *a = hash_entry (a_, struct process, hash_elem);
   struct process *b = hash_entry (b_, struct process, hash_elem);
   return a->pid < b->pid;
-}
-
-static unsigned frame_hash (const struct hash_elem *f_, void *aux UNUSED)
-{
-  struct frame *f = hash_entry (f_, struct frame, hash_elem);
-  return hash_bytes (&f->kernel_page_addr, sizeof (f->kernel_page_addr));
-}
-
-static bool
-frame_less (const struct hash_elem *a_, const struct hash_elem *b_,
-            void *aux UNUSED)
-{
-  struct frame *a = hash_entry (a_, struct frame, hash_elem);
-  struct frame *b = hash_entry (b_, struct frame, hash_elem);
-  return a->kernel_page_addr < b->kernel_page_addr;
 }
 
 /* Initializes the threading system by transforming the code
@@ -144,8 +109,11 @@ thread_init (void)
 {
   ASSERT (intr_get_level () == INTR_OFF);
 
-  lock_init (&tid_lock);
+#ifdef USERPROG
   lock_init (&filesys_lock);
+#endif
+
+  lock_init (&tid_lock);
   list_init (&ready_list);
   list_init (&all_list);
 
@@ -172,10 +140,13 @@ thread_start (void)
   /* Wait for the idle thread to initialize idle_thread. */
   sema_down (&idle_started);
 
-  hash_init (&frametable, frame_hash, frame_less, NULL);
+#ifdef USERPROG
   hash_init (&process_hashtable, process_hash, process_less, NULL);
-  lock_init (&frametable_lock);
   lock_init (&process_lock);
+  lock_init (&frametable_lock);
+  list_init (&all_frames);
+  lock_init (&frametable_lock);
+#endif
 }
 
 /* Returns the number of threads currently in the ready list */
@@ -277,13 +248,12 @@ thread_create (const char *name, int priority,
 #ifdef USERPROG
   /* Initialise the hash table for file descriptors. */
   hash_init (&(t->hash_table_of_file_nodes), file_node_hash, file_node_less, NULL);
-#endif
   /* Initialise the supplementary page table. */
-  hash_init (&t->sup_pagetable, sup_page_hash, sup_page_cmp, NULL);
+  hash_init (&t->sup_pagetable, sup_page_hash, sup_page_cmp, NULL); //TODO: standardize names
   /* Initialise the mmap node hash table. */
   hash_init (&t->mmap_hash_table, mmap_hash, mmap_cmp, NULL);
-  /* Initialise the frame list. */
-  list_init(&t->frame_list);
+#endif
+
   /* Add to run queue. */
   thread_unblock (t);
 

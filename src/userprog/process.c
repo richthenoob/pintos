@@ -4,26 +4,30 @@
 #include <round.h>
 #include <stdio.h>
 #include <string.h>
-#include <vm/page.h>
-#include "userprog/gdt.h"
-#include "userprog/pagedir.h"
-#include "userprog/tss.h"
-#include "userprog/syscall.h"
-#include "filesys/directory.h"
 #include "filesys/file.h"
 #include "filesys/filesys.h"
 #include "threads/flags.h"
-#include "threads/init.h"
 #include "threads/interrupt.h"
 #include "threads/palloc.h"
 #include "threads/thread.h"
 #include "threads/vaddr.h"
 #include "threads/malloc.h"
+
+#ifdef USERPROG
+#include "userprog/gdt.h"
+#include "userprog/pagedir.h"
+#include "userprog/tss.h"
+#include "userprog/syscall.h"
+#include "userprog/filesys_wrapper.h"
 #include "vm/frame.h"
+#include "vm/page.h"
+#define MAX(a, b) (((a) > (b)) ? (a) : (b))
+#define MIN(a, b) (((a) < (b)) ? (a) : (b))
+#endif
 
 static thread_func start_process NO_RETURN;
 static bool load (const char *cmdline, void (**eip) (void), void **esp);
-static void free_frames (void);
+static void free_frame (struct hash_elem *element, void *aux UNUSED);
 
 /* Locates a process in process_hashtable given a pid. Must hold process_lock
   before calling this function. */
@@ -317,28 +321,28 @@ process_exit_with_code (int exit_code)
   lock_release (&filesys_lock);
 
   /* Free all the frames used by this process. */
-  free_frames ();
-
-  /* Free thread's supplemental page table entries. */
-  hash_destroy (&thread_current ()->sup_pagetable, free_sup_page_entry);
+  lock_acquire (&frametable_lock);
+  hash_destroy (&thread_current()->sup_pagetable, free_frame);
+  lock_release (&frametable_lock);
 
   /* Ensure that no locks are still held by this process. */
-  ASSERT (!lock_held_by_current_thread (&process_lock));
-  ASSERT (!lock_held_by_current_thread (&filesys_lock));
+  ASSERT (!lock_held_by_current_thread (&process_lock))
+  ASSERT (!lock_held_by_current_thread (&filesys_lock))
+  ASSERT (!lock_held_by_current_thread (&frametable_lock))
   thread_exit ();
 }
 
-static void free_frames (void)
+static void free_frame (struct hash_elem *element, void *aux UNUSED)
 {
-  struct list *frame_list = &thread_current ()->frame_list;
-  struct list_elem *e;
-  struct frame *f;
-  for (e = list_begin (frame_list); e != list_end (frame_list);)
-    {
-      f = list_entry (e, struct frame, list_elem);
-      e = list_next (e);
-      falloc_free_frame (f);
-    }
+  struct page_entry *entry = hash_entry (element,
+                                         struct page_entry,
+                                         spt_elem);
+  if (entry->frame_ptr != NULL) {
+    lock_acquire (&entry->frame_ptr->frame_lock);
+    falloc_free_frame (entry->frame_ptr);
+  }
+  hash_delete (&thread_current()->sup_pagetable, element);
+  free (entry);
 }
 
 /* Free the current process's resources. */
@@ -398,34 +402,34 @@ typedef uint16_t Elf32_Half;
 /* Executable header.  See [ELF1] 1-4 to 1-8.
    This appears at the very beginning of an ELF binary. */
 struct Elf32_Ehdr {
-  unsigned char e_ident[16];
-  Elf32_Half e_type;
-  Elf32_Half e_machine;
-  Elf32_Word e_version;
-  Elf32_Addr e_entry;
-  Elf32_Off e_phoff;
-  Elf32_Off e_shoff;
-  Elf32_Word e_flags;
-  Elf32_Half e_ehsize;
-  Elf32_Half e_phentsize;
-  Elf32_Half e_phnum;
-  Elf32_Half e_shentsize;
-  Elf32_Half e_shnum;
-  Elf32_Half e_shstrndx;
+    unsigned char e_ident[16];
+    Elf32_Half e_type;
+    Elf32_Half e_machine;
+    Elf32_Word e_version;
+    Elf32_Addr e_entry;
+    Elf32_Off e_phoff;
+    Elf32_Off e_shoff;
+    Elf32_Word e_flags;
+    Elf32_Half e_ehsize;
+    Elf32_Half e_phentsize;
+    Elf32_Half e_phnum;
+    Elf32_Half e_shentsize;
+    Elf32_Half e_shnum;
+    Elf32_Half e_shstrndx;
 };
 
 /* Program header.  See [ELF1] 2-2 to 2-4.
    There are e_phnum of these, starting at file offset e_phoff
    (see [ELF1] 1-6). */
 struct Elf32_Phdr {
-  Elf32_Word p_type;
-  Elf32_Off p_offset;
-  Elf32_Addr p_vaddr;
-  Elf32_Addr p_paddr;
-  Elf32_Word p_filesz;
-  Elf32_Word p_memsz;
-  Elf32_Word p_flags;
-  Elf32_Word p_align;
+    Elf32_Word p_type;
+    Elf32_Off p_offset;
+    Elf32_Addr p_vaddr;
+    Elf32_Addr p_paddr;
+    Elf32_Word p_filesz;
+    Elf32_Word p_memsz;
+    Elf32_Word p_flags;
+    Elf32_Word p_align;
 };
 
 /* Values for p_type.  See [ELF1] 2-3. */
@@ -471,9 +475,9 @@ load (const char *file_name, void (**eip) (void), void **esp)
   process_activate ();
 
   /* Open executable file. */
-  lock_acquire(&filesys_lock);
+  lock_acquire (&filesys_lock);
   file = filesys_open (file_name);
-  lock_release(&filesys_lock);
+  lock_release (&filesys_lock);
   if (file == NULL)
     {
       printf ("load: %s: open failed\n", file_name);
@@ -481,7 +485,7 @@ load (const char *file_name, void (**eip) (void), void **esp)
     }
 
   /* Read and verify executable header. */
-  lock_acquire(&filesys_lock);
+  lock_acquire (&filesys_lock);
   if (file_read (file, &ehdr, sizeof ehdr) != sizeof ehdr
       || memcmp (ehdr.e_ident, "\177ELF\1\1\1", 7)
       || ehdr.e_type != 2
@@ -490,11 +494,11 @@ load (const char *file_name, void (**eip) (void), void **esp)
       || ehdr.e_phentsize != sizeof (struct Elf32_Phdr)
       || ehdr.e_phnum > 1024)
     {
-      lock_release(&filesys_lock);
+      lock_release (&filesys_lock);
       printf ("load: %s: error loading executable\n", file_name);
       goto done;
     }
-  lock_release(&filesys_lock);
+  lock_release (&filesys_lock);
 
   /* Read program headers. */
   file_ofs = ehdr.e_phoff;
@@ -502,7 +506,7 @@ load (const char *file_name, void (**eip) (void), void **esp)
     {
       struct Elf32_Phdr phdr;
 
-      lock_acquire(&filesys_lock);
+      lock_acquire (&filesys_lock);
       if (file_ofs < 0 || file_ofs > file_length (file))
         {
           lock_release (&filesys_lock);
@@ -516,7 +520,7 @@ load (const char *file_name, void (**eip) (void), void **esp)
           lock_release (&filesys_lock);
           goto done;
         }
-      lock_release(&filesys_lock);
+      lock_release (&filesys_lock);
       file_ofs += sizeof phdr;
       switch (phdr.p_type)
         {
@@ -576,9 +580,9 @@ load (const char *file_name, void (**eip) (void), void **esp)
      the executable when the process finishes. */
   success = true;
   add_to_hash_table_of_file_nodes (file);
-  lock_acquire(&filesys_lock);
+  lock_acquire (&filesys_lock);
   file_deny_write (file);
-  lock_release(&filesys_lock);
+  lock_release (&filesys_lock);
 
   lock_acquire (&process_lock);
   struct process *p = process_lookup (thread_current ()->tid);
@@ -603,13 +607,13 @@ validate_segment (const struct Elf32_Phdr *phdr, struct file *file)
     return false;
 
   /* p_offset must point within FILE. */
-  lock_acquire(&filesys_lock);
+  lock_acquire (&filesys_lock);
   if (phdr->p_offset > (Elf32_Off) file_length (file))
     {
       lock_release (&filesys_lock);
       return false;
     }
-  lock_release(&filesys_lock);
+  lock_release (&filesys_lock);
 
   /* p_memsz must be at least as big as p_filesz. */
   if (phdr->p_memsz < phdr->p_filesz)
@@ -681,12 +685,27 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
 
       if (page_zero_bytes == PGSIZE)
         {
-          sup_pagetable_add_all_zero (upage, writable, file);
+          add_to_sup_pagetable (upage, All_ZERO, file, ofs,
+                                read_bytes, zero_bytes, writable);
         }
       else
         {
-          sup_pagetable_add_file (FILE_SYSTEM, upage, file, ofs,
-                                  page_read_bytes, page_zero_bytes, writable);
+          struct page_entry *entry = sup_pagetable_entry_lookup (upage);
+          if (entry != NULL)
+            {
+              /* Loading of segments onto same page, so update entry and
+                 re-insert into supplemental page table. */
+              ASSERT (entry->user_page_addr == upage)
+              ASSERT (entry->file == file)
+              ofs = MIN (ofs, entry->ofs);
+              page_read_bytes = MAX(page_read_bytes, entry->read_bytes);
+              page_zero_bytes = MIN(page_zero_bytes, entry->zero_bytes);
+              writable = writable || entry->writable;
+              free_sup_page_entry (&entry->spt_elem, NULL);
+            }
+
+          add_to_sup_pagetable (upage, FILE_SYSTEM, file, ofs,
+                                page_read_bytes, page_zero_bytes, writable);
         }
 
       ofs += page_read_bytes;
@@ -702,19 +721,13 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
 static bool
 setup_stack (void **esp)
 {
-  struct frame *kframe;
-  bool success = false;
+  bool success = grow_stack (((uint8_t *) PHYS_BASE) - PGSIZE);
 
-  kframe = falloc_get_frame (true, STACK,
-                             ((uint8_t *) PHYS_BASE) - PGSIZE, NULL, false);
-  if (kframe != NULL)
+  if (success)
     {
-      success = install_page (((uint8_t *) PHYS_BASE) - PGSIZE, kframe->kernel_page_addr, true);
-      if (success)
-        *esp = PHYS_BASE;
-      else
-        falloc_free_frame (kframe);
+      *esp = PHYS_BASE;
     }
+
   return success;
 }
 
