@@ -168,9 +168,6 @@ page_fault (struct intr_frame *f)
 
           /* Either an invalid stack access was detected, or growing the stack
              failed. */
-//          printf ("%s: dying due to interrupt %#04x (%s) with fault address %p.\n",
-//              thread_name (), f->vec_no, intr_name (f->vec_no), fault_addr);
-//          intr_dump_frame (f);
           f->cs = SEL_UCSEG;
           kill (f);
           NOT_REACHED()

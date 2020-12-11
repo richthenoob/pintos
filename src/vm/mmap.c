@@ -1,6 +1,7 @@
 #include "mmap.h"
 #include <stdio.h>
 #include "filesys/file.h"
+#include "filesys/filesys.h"
 #include "threads/thread.h"
 #include "threads/vaddr.h"
 #include "threads/malloc.h"
@@ -9,21 +10,26 @@
 #include "userprog/pagedir.h"
 #include "vm/page.h"
 
+/* Maps a file to given user address. */
 mapid_t
-memory_map (int fd, void *addr)
+memory_map (int fd, void *user_page_addr)
 {
- /* Check if the input of fd and addr are valid. */
-  if (addr == 0 || fd <= STDOUT_FILENO || (uint32_t) addr % PGSIZE != 0)
+  /* Check if the input of fd and user_page_addr are valid. */
+  if (user_page_addr == 0 ||
+      fd <= STDOUT_FILENO ||
+      (uint32_t) user_page_addr % PGSIZE != 0)
     {
       return MMAP_ERROR;
     }
 
- /* Open the file. */
+  /* Find the file_node in the process's hash_table_of_file_nodes. */
   struct file_node *file_node = file_node_lookup (fd);
   if (!file_node || !file_node->file)
     {
       return MMAP_ERROR;
     }
+
+  /* Open file and check file length. */
   lock_acquire (&filesys_lock);
   struct file *file = file_reopen (file_node->file);
   lock_release (&filesys_lock);
@@ -42,7 +48,9 @@ memory_map (int fd, void *addr)
       return MMAP_ERROR;
     }
 
-  /* Assign a mmapid and push mmap_node into the hash table. */
+  /* Assign a mmapid and push mmap_node into the hash table. Increment mmap_count
+     by one so that any calls to filesys_close will not actually close the file
+     before this function finishes. */
   struct mmap_node *mmap_node = (struct mmap_node *) malloc (sizeof (struct mmap_node));
   mmap_node->mapid = next_mapid_value ();
   mmap_node->fd = fd;
@@ -50,7 +58,8 @@ memory_map (int fd, void *addr)
   hash_insert (&thread_current ()->mmap_hash_table, &mmap_node->hash_elem);
   file_node->mmap_count += 1;
 
-  /* Determine the zero_bytes and the read_bytes. */
+  /* Determine zero_bytes and read_bytes so we know how many pagetable entries
+     we should add. Note that we are loading the file in lazily here. */
   uint32_t read_bytes = length;
   uint32_t zero_bytes = -1;
   int n = 0;
@@ -66,26 +75,31 @@ memory_map (int fd, void *addr)
     {
       /* Page exists in the thread's page directory, so we are potentially
          overwriting some data. */
-      if (pagedir_get_page (thread_current ()->pagedir, addr) != NULL)
+      if (pagedir_get_page (thread_current ()->pagedir, user_page_addr) != NULL)
         {
           return MMAP_ERROR;
         }
-      if (sup_pagetable_entry_lookup (addr) != NULL)
+      /* Avoid overwriting another supplemental page table entry, since that
+         indicates something else should be there. */
+      if (sup_pagetable_entry_lookup (user_page_addr) != NULL)
         {
-          // TODO free previously allocated sup. page table entries
+          memory_unmap (mmap_node->mapid);
           return MMAP_ERROR;
         }
 
+      /* Calculate the number of bytes to read/zero in this page. */
       struct page_entry *entry;
       size_t page_read_bytes = read_bytes < PGSIZE ? read_bytes : PGSIZE;
       size_t page_zero_bytes = PGSIZE - page_read_bytes;
 
-      entry = add_to_sup_pagetable (addr, MMAP_FILE, file, ofs, read_bytes, zero_bytes, true);
+      entry = add_to_sup_pagetable (user_page_addr, MMAP_FILE, file,
+                                    ofs, page_read_bytes, page_zero_bytes, true);
 
+      /* Adjust the number of bytes we have to continue reading from the file. */
       ofs += page_read_bytes;
       read_bytes -= page_read_bytes;
       zero_bytes -= page_zero_bytes;
-      addr += PGSIZE;
+      user_page_addr += PGSIZE;
 
       /* Add entry to this mmap node so that we can remove it accordingly
        when the thread is terminated or when munmap is called. */
@@ -95,7 +109,9 @@ memory_map (int fd, void *addr)
   return mmap_node->mapid;
 }
 
-bool memory_unmap (mapid_t mapping) {
+/* Removes a memory mapping, writing to disk if necessary. */
+bool memory_unmap (mapid_t mapping)
+{
   /* Check if the node is mapped. */
   struct mmap_node *mmap_node = mmap_node_lookup (mapping);
   if (mmap_node == NULL)
@@ -107,6 +123,7 @@ bool memory_unmap (mapid_t mapping) {
   struct page_entry *entry;
   struct list *list_pages_open = &mmap_node->list_pages_open;
 
+  /* Iterate through the node's list of open pages.  */
   for (e = list_begin (list_pages_open); e != list_end (list_pages_open);)
     {
       entry = list_entry (e, struct page_entry, mmap_elem);
@@ -115,7 +132,8 @@ bool memory_unmap (mapid_t mapping) {
       /* Write back to disk if page has been written to. */
       if (pagedir_is_dirty (thread_current ()->pagedir, entry->user_page_addr))
         {
-          write_page_back_to_file(mmap_node->fd, entry->ofs, &entry->user_page_addr, entry->read_bytes);
+          write_page_back_to_file (mmap_node->fd, entry->ofs,
+                                   entry->user_page_addr, entry->read_bytes);
         }
 
       /* Remove mapping from page directory and free the appropriate memory. */
@@ -125,7 +143,6 @@ bool memory_unmap (mapid_t mapping) {
 
   /* Remove this mmap_node's link to its corresponding file_node. */
   file_node_lookup (mmap_node->fd)->mmap_count -= 1;
-
   hash_delete (&thread_current ()->mmap_hash_table, &mmap_node->hash_elem);
   free (mmap_node);
 
@@ -134,7 +151,10 @@ bool memory_unmap (mapid_t mapping) {
 
 /* Copy write_bytes bytes of data from user_page_addr to file indicated by fd
    at declared offset. */
-bool write_page_back_to_file(int fd, off_t ofs, void *user_page_addr, uint32_t write_bytes) {
+bool
+write_page_back_to_file (int fd, off_t ofs,
+                         void *user_page_addr, uint32_t write_bytes)
+{
   ASSERT (ofs % PGSIZE == 0)
 
   /* Store where the file pointer is before we write to it, so that we can
@@ -143,7 +163,7 @@ bool write_page_back_to_file(int fd, off_t ofs, void *user_page_addr, uint32_t w
 
   /* Write to specific offset within file. */
   syscall_seek (fd, ofs);
-  int bytes_written = syscall_write (fd, user_page_addr, write_bytes);
+  int bytes_written = syscall_write (fd, &user_page_addr, write_bytes);
   ASSERT (bytes_written > 0)
   ASSERT ((uint32_t) bytes_written == write_bytes)
 

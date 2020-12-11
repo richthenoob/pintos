@@ -2,6 +2,8 @@
 #include <debug.h>
 #include "filesys/inode.h"
 #include "threads/malloc.h"
+#include "threads/synch.h"
+#include "userprog/filesys_wrapper.h"
 
 /* An open file. */
 struct file 
@@ -168,9 +170,12 @@ file_tell (struct file *file)
   return file->pos;
 }
 
-/* Check whether A and B are the same file */
+/* Atomically checks whether A and B are the same file */
 bool
 same_file (struct file *a, struct file *b)
 {
-  return a->inode == b->inode;
+  lock_acquire (&filesys_lock);
+  bool success = a->inode == b->inode;
+  lock_release (&filesys_lock);
+  return success;
 }
